@@ -21,8 +21,8 @@ class CMAESOptimizer(BaseAirfoilOptimizer):
         seed: int = 42,
         is_meta: bool = False,
         rl_policy: Optional[Any] = None,
-        sigma0: float = 0.03,
-        pop_size: int = 12,
+        sigma0: float = 0.035,
+        pop_size: int = 10,
     ):
         super().__init__(evaluator, x0, bounds, max_evals, seed, is_meta, rl_policy)
         self.sigma0 = sigma0
@@ -45,9 +45,9 @@ class CMAESOptimizer(BaseAirfoilOptimizer):
         return np.concatenate([base, specific])
 
     def apply_action(self, action: np.ndarray, es: cma.CMAEvolutionStrategy):
-        """Action (1维) -> 动态调节当前进化策略的全局步长 sigma"""
-        scale_sigma = float(np.exp(np.clip(action[0], -1.5, 1.5)))
-        new_sigma = float(np.clip(es.sigma * scale_sigma, 1e-4, 0.20))
+        """Action (1维) -> 动态调节当前进化策略的全局步长 sigma (温和弹性缩放)"""
+        scale_sigma = float(np.exp(np.clip(action[0], -1.0, 1.0) * 0.30))
+        new_sigma = float(np.clip(es.sigma * scale_sigma, 1e-4, 0.15))
         es.sigma = new_sigma
         self.current_sigma = new_sigma
 
@@ -98,11 +98,14 @@ class CMAESOptimizer(BaseAirfoilOptimizer):
 
             es.tell(X, fitnesses_to_tell)
 
-            # 记录经验
+            # 记录经验 (跨工况自适应归一化稠密奖励)
             if self.is_meta and action is not None:
                 next_state = self.get_state()
-                reward = (self.best_score - score_before) / 10.0 - 0.01
                 done = bool(self.eval_count >= self.max_evals or bool(es.stop()))
+                rel_gain = (self.best_score - score_before) / max(self.initial_score, 15.0)
+                reward = rel_gain * 20.0 - 0.002
+                if done:
+                    reward += max((self.best_score - self.initial_score) / 50.0, 0.0) * 0.1
                 self.transitions.append({
                     "state": state,
                     "action": action,

@@ -1,5 +1,6 @@
 """SPSA (Simultaneous Perturbation Stochastic Approximation) 翼型优化器：
 支持 Vanilla SPSA 与 RL-Meta-SPSA（动态步长与摄动尺度调节）。
+采用 Spall 经典标准准则，并基于理论衰减调度曲线进行 RL 锚定弹性缩放。
 """
 
 from typing import Any, Dict, Optional, Tuple
@@ -20,11 +21,11 @@ class SPSAOptimizer(BaseAirfoilOptimizer):
         seed: int = 42,
         is_meta: bool = False,
         rl_policy: Optional[Any] = None,
-        a0: float = 0.001,
-        c0: float = 0.015,
+        a0: float = 0.0008,
+        c0: float = 0.020,
         alpha: float = 0.602,
         gamma: float = 0.101,
-        momentum: float = 0.70,
+        momentum: float = 0.75,
     ):
         super().__init__(evaluator, x0, bounds, max_evals, seed, is_meta, rl_policy)
         self.a0 = a0
@@ -57,16 +58,18 @@ class SPSAOptimizer(BaseAirfoilOptimizer):
         specific = np.array([log_a, log_c, grad_norm, grad_cos], dtype=np.float32)
         return np.concatenate([base, specific])
 
-    def apply_action(self, action: np.ndarray):
-        """Action (2维) -> 调节步长 a 与扰动 c 的自适应乘子"""
-        # action in [-1, 1]
-        scale_a = np.exp(np.clip(action[0], -1.5, 1.5))
-        scale_c = np.exp(np.clip(action[1], -1.5, 1.5))
-        self.current_a *= scale_a
-        self.current_c *= scale_c
-        # 边界约束防护
-        self.current_a = np.clip(self.current_a, 1e-5, 0.01)
-        self.current_c = np.clip(self.current_c, 1e-4, 0.03)
+    def apply_action(self, action: np.ndarray, vanilla_a: float = None, vanilla_c: float = None):
+        """Action (2维) -> 锚定 Spall 理论衰减基准进行动态弹性调节，彻底废除无界指数累乘"""
+        if vanilla_a is None:
+            vanilla_a = self.a0 / (1.0 + self.iter_k / 20.0) ** self.alpha_exp
+        if vanilla_c is None:
+            vanilla_c = self.c0 / (1.0 + self.iter_k) ** self.gamma_exp
+
+        scale_a = float(np.exp(np.clip(action[0], -1.0, 1.0) * 0.40))
+        scale_c = float(np.exp(np.clip(action[1], -1.0, 1.0) * 0.40))
+
+        self.current_a = float(np.clip(vanilla_a * scale_a, 1e-5, 0.008))
+        self.current_c = float(np.clip(vanilla_c * scale_c, 1e-4, 0.040))
 
     def run(self) -> Dict[str, Any]:
         self.evaluate_initial()
@@ -75,7 +78,7 @@ class SPSAOptimizer(BaseAirfoilOptimizer):
 
         while self.eval_count < self.max_evals:
             self.iter_k += 1
-            # 标准 Vanilla 调度衰减
+            # 标准 Vanilla 调度衰减 (Spall 准则)
             vanilla_a = self.a0 / (1.0 + self.iter_k / 20.0) ** self.alpha_exp
             vanilla_c = self.c0 / (1.0 + self.iter_k) ** self.gamma_exp
 
@@ -87,7 +90,7 @@ class SPSAOptimizer(BaseAirfoilOptimizer):
             action = None
             if self.is_meta and self.rl_policy is not None:
                 action = self.rl_policy(state)
-                self.apply_action(action)
+                self.apply_action(action, vanilla_a, vanilla_c)
 
             # 伯努利随机摄动向量 Delta in {-1, +1}^d
             delta = self.rng.choice([-1.0, 1.0], size=d)
@@ -121,9 +124,12 @@ class SPSAOptimizer(BaseAirfoilOptimizer):
             # 记录 RL 转移
             if self.is_meta and action is not None:
                 next_state = self.get_state()
-                # 增量升阻比差分奖励
-                reward = (self.best_score - score_before) / 10.0 - 0.01
                 done = (self.eval_count >= self.max_evals)
+                # 跨工况自适应归一化稠密奖励
+                rel_gain = (self.best_score - score_before) / max(self.initial_score, 15.0)
+                reward = rel_gain * 20.0 - 0.002
+                if done:
+                    reward += max((self.best_score - self.initial_score) / 50.0, 0.0) * 0.1
                 self.transitions.append({
                     "state": state,
                     "action": action,

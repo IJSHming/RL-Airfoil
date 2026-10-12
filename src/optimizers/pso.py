@@ -20,13 +20,16 @@ class PSOOptimizer(BaseAirfoilOptimizer):
         seed: int = 42,
         is_meta: bool = False,
         rl_policy: Optional[Any] = None,
-        swarm_size: int = 15,
-        w: float = 0.729,
-        c1: float = 1.494,
-        c2: float = 1.494,
+        swarm_size: int = 12,
+        w: float = 0.78,
+        c1: float = 1.4,
+        c2: float = 1.8,
     ):
         super().__init__(evaluator, x0, bounds, max_evals, seed, is_meta, rl_policy)
         self.swarm_size = swarm_size
+        self.base_w = w
+        self.base_c1 = c1
+        self.base_c2 = c2
         self.w = w
         self.c1 = c1
         self.c2 = c2
@@ -49,12 +52,11 @@ class PSOOptimizer(BaseAirfoilOptimizer):
         return np.concatenate([base, specific])
 
     def apply_action(self, action: np.ndarray):
-        """Action (3维) -> 动态调节 [惯性权重 w, 认知系数 c1, 社会系数 c2]"""
-        # action in [-1, 1]^3
-        a1, a2, a3 = action[0], action[1], action[2]
-        self.w = float(np.clip(0.20 + 0.75 * ((a1 + 1.0) / 2.0), 0.1, 0.95))
-        self.c1 = float(np.clip(0.50 + 2.00 * ((a2 + 1.0) / 2.0), 0.2, 3.0))
-        self.c2 = float(np.clip(0.50 + 2.00 * ((a3 + 1.0) / 2.0), 0.2, 3.0))
+        """Action (3维) -> 锚定最优基准超参 [w=0.78, c1=1.4, c2=1.8] 进行弹性调节"""
+        a1, a2, a3 = float(action[0]), float(action[1]), float(action[2])
+        self.w = float(np.clip(self.base_w + 0.15 * np.clip(a1, -1.0, 1.0), 0.40, 0.92))
+        self.c1 = float(np.clip(self.base_c1 + 0.35 * np.clip(a2, -1.0, 1.0), 0.60, 2.40))
+        self.c2 = float(np.clip(self.base_c2 + 0.35 * np.clip(a3, -1.0, 1.0), 0.80, 2.60))
 
     def run(self) -> Dict[str, Any]:
         d = len(self.x0)
@@ -101,6 +103,10 @@ class PSOOptimizer(BaseAirfoilOptimizer):
             if self.is_meta and self.rl_policy is not None:
                 action = self.rl_policy(state)
                 self.apply_action(action)
+            else:
+                self.w = self.base_w
+                self.c1 = self.base_c1
+                self.c2 = self.base_c2
 
             # 更新粒子速度与位置
             gbest = self.best_x.copy()
@@ -128,11 +134,14 @@ class PSOOptimizer(BaseAirfoilOptimizer):
                     pbest_scores[i] = score
                     pbest_positions[i] = positions[i].copy()
 
-            # 记录经验
+            # 记录经验 (跨工况自适应归一化稠密奖励)
             if self.is_meta and action is not None:
                 next_state = self.get_state()
-                reward = (self.best_score - score_before) / 10.0 - 0.01
                 done = (self.eval_count >= self.max_evals)
+                rel_gain = (self.best_score - score_before) / max(self.initial_score, 15.0)
+                reward = rel_gain * 20.0 - 0.002
+                if done:
+                    reward += max((self.best_score - self.initial_score) / 50.0, 0.0) * 0.1
                 self.transitions.append({
                     "state": state,
                     "action": action,

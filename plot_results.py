@@ -32,7 +32,11 @@ plt.rcParams.update({
     "figure.autolayout": False,
 })
 
-OPTIMIZER_ORDER = ["SPSA", "Py-BOBYQA", "GA", "PSO", "CMA-ES", "TuRBO"]
+def get_optimizer_order(results: dict) -> List[str]:
+    de_key = "DE" if "DE" in results else "GA"
+    return ["SPSA", "Py-BOBYQA", de_key, "PSO", "CMA-ES", "TuRBO"]
+
+
 COLOR_VANILLA = "#2563EB"   # 科技蓝
 COLOR_META = "#DC2626"      # 活力红
 COLOR_NACA = "#4B5563"      # 沉稳灰
@@ -54,8 +58,9 @@ def plot_convergence_curves(data: dict, output_dir: str):
     results = data["results"]
     max_evals = data["condition"]["max_evals"]
     steps = np.arange(1, max_evals + 1)
+    optimizer_order = get_optimizer_order(results)
 
-    for idx, opt_name in enumerate(OPTIMIZER_ORDER):
+    for idx, opt_name in enumerate(optimizer_order):
         ax = axes[idx]
         v_hists = np.array([r["history"] for r in results[opt_name]["Vanilla"]])
         m_hists = np.array([r["history"] for r in results[opt_name]["RL-Meta"]])
@@ -106,13 +111,14 @@ def plot_convergence_curves(data: dict, output_dir: str):
 def plot_bar_comparison(data: dict, output_dir: str):
     """图 2: 柱状图对比：
     1. 生成 6 张独立的优化器 10 随机种子 Vanilla vs RL-Meta 详细对照柱状图
-    2. 生成 1 张 2x3 六合一全景图 (bar_comparison_6panels.png / bar_comparison.png)
+    2. 生成 1 张 2x3 六合一全景图 (bar_comparison.png)
     """
     results = data["results"]
     summary = {row["optimizer"]: row for row in data["summary"]}
+    optimizer_order = get_optimizer_order(results)
 
     # 1. 生成 6 张独立的单优化器柱状图
-    for opt_name in OPTIMIZER_ORDER:
+    for opt_name in optimizer_order:
         v_runs = results[opt_name]["Vanilla"]
         m_runs = results[opt_name]["RL-Meta"]
         n_seeds = len(v_runs)
@@ -187,7 +193,7 @@ def plot_bar_comparison(data: dict, output_dir: str):
     fig, axes = plt.subplots(2, 3, figsize=(18, 10), sharey=False)
     axes = axes.flatten()
 
-    for idx, opt_name in enumerate(OPTIMIZER_ORDER):
+    for idx, opt_name in enumerate(optimizer_order):
         ax = axes[idx]
         v_runs = results[opt_name]["Vanilla"]
         m_runs = results[opt_name]["RL-Meta"]
@@ -228,17 +234,16 @@ def plot_bar_comparison(data: dict, output_dir: str):
 
     png_path = os.path.join(output_dir, "bar_comparison.png")
     pdf_path = os.path.join(output_dir, "bar_comparison.pdf")
-    panels_path = os.path.join(output_dir, "bar_comparison_6panels.png")
     plt.savefig(png_path, dpi=300, bbox_inches="tight")
     plt.savefig(pdf_path, bbox_inches="tight")
-    plt.savefig(panels_path, dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"已生成 6 张单优化器柱状图与六合一柱状图: {png_path} & {panels_path}")
+    print(f"已生成 6 张单优化器柱状图与综合柱状图: {png_path}")
 
 
 def plot_boxplot_comparison(data: dict, output_dir: str):
     """图 3: RL-Meta 与 Vanilla 最终升阻比分布的 Boxplot 箱线图"""
     results = data["results"]
+    optimizer_order = get_optimizer_order(results)
 
     fig, ax = plt.subplots(figsize=(13, 6.5))
 
@@ -246,7 +251,7 @@ def plot_boxplot_comparison(data: dict, output_dir: str):
     box_data = []
     colors = []
 
-    for i, opt in enumerate(OPTIMIZER_ORDER):
+    for i, opt in enumerate(optimizer_order):
         v_scores = [r["best_score"] for r in results[opt]["Vanilla"]]
         m_scores = [r["best_score"] for r in results[opt]["RL-Meta"]]
 
@@ -280,9 +285,9 @@ def plot_boxplot_comparison(data: dict, output_dir: str):
     ax.set_ylabel("Final Penalized L/D ($C_L / C_D$)", fontsize=13, fontweight="bold")
     ax.set_title("Distribution of Final L/D across 10 Independent Seeds (Boxplot & Data Points)", fontsize=14, fontweight="bold", pad=15)
 
-    tick_pos = [i * 2.5 + 1.2 for i in range(len(OPTIMIZER_ORDER))]
+    tick_pos = [i * 2.5 + 1.2 for i in range(len(optimizer_order))]
     ax.set_xticks(tick_pos)
-    ax.set_xticklabels(OPTIMIZER_ORDER, fontsize=12, fontweight="bold")
+    ax.set_xticklabels(optimizer_order, fontsize=12, fontweight="bold")
     ax.grid(True, axis="y", alpha=0.6)
 
     # 自定义图例
@@ -314,8 +319,9 @@ def plot_airfoil_shapes(data: dict, output_dir: str):
     axes = axes.flatten()
 
     results = data["results"]
+    optimizer_order = get_optimizer_order(results)
 
-    for idx, opt in enumerate(OPTIMIZER_ORDER):
+    for idx, opt in enumerate(optimizer_order):
         ax = axes[idx]
 
         # 排序寻找第 5 名 (中位数解，按 10 种子从高到低排序索引 4)
@@ -393,12 +399,13 @@ def plot_comprehensive_overview(data: dict, output_dir: str):
     max_evals = data["condition"]["max_evals"]
     steps = np.arange(1, max_evals + 1)
     summary = {row["optimizer"]: row for row in data["summary"]}
+    optimizer_order = get_optimizer_order(results)
 
     # Panel A: 整体平均收敛轨迹对比
     ax_a = fig.add_subplot(gs[0, 0])
     all_v_hists = []
     all_m_hists = []
-    for opt in OPTIMIZER_ORDER:
+    for opt in optimizer_order:
         v_h = np.mean([r["history"] for r in results[opt]["Vanilla"]], axis=0)
         m_h = np.mean([r["history"] for r in results[opt]["RL-Meta"]], axis=0)
         all_v_hists.append(v_h)
@@ -418,14 +425,14 @@ def plot_comprehensive_overview(data: dict, output_dir: str):
 
     # Panel B: 柱状图对比
     ax_b = fig.add_subplot(gs[0, 1])
-    x = np.arange(len(OPTIMIZER_ORDER))
+    x = np.arange(len(optimizer_order))
     width = 0.35
-    v_means = [summary[opt]["vanilla_mean"] for opt in OPTIMIZER_ORDER]
-    m_means = [summary[opt]["meta_mean"] for opt in OPTIMIZER_ORDER]
+    v_means = [summary[opt]["vanilla_mean"] for opt in optimizer_order]
+    m_means = [summary[opt]["meta_mean"] for opt in optimizer_order]
     ax_b.bar(x - width/2, v_means, width, label="Vanilla", color=COLOR_VANILLA, alpha=0.85)
     ax_b.bar(x + width/2, m_means, width, label="RL-Meta", color=COLOR_META, alpha=0.85)
     ax_b.set_xticks(x)
-    ax_b.set_xticklabels(OPTIMIZER_ORDER, fontsize=11, fontweight="bold")
+    ax_b.set_xticklabels(optimizer_order, fontsize=11, fontweight="bold")
     ax_b.set_title("(B) Final L/D Performance Comparison", fontsize=13, fontweight="bold")
     ax_b.set_ylabel("Final L/D", fontsize=11, fontweight="bold")
     ax_b.legend(loc="upper left", fontsize=11)
@@ -436,7 +443,7 @@ def plot_comprehensive_overview(data: dict, output_dir: str):
     positions = []
     box_data = []
     colors = []
-    for i, opt in enumerate(OPTIMIZER_ORDER):
+    for i, opt in enumerate(optimizer_order):
         v_scores = [r["best_score"] for r in results[opt]["Vanilla"]]
         m_scores = [r["best_score"] for r in results[opt]["RL-Meta"]]
         positions.extend([i*2.2 + 0.7, i*2.2 + 1.4])
@@ -447,8 +454,8 @@ def plot_comprehensive_overview(data: dict, output_dir: str):
     for patch, c in zip(bp["boxes"], colors):
         patch.set_facecolor(c)
         patch.set_alpha(0.75)
-    ax_c.set_xticks([i*2.2 + 1.05 for i in range(len(OPTIMIZER_ORDER))])
-    ax_c.set_xticklabels(OPTIMIZER_ORDER, fontsize=11, fontweight="bold")
+    ax_c.set_xticks([i*2.2 + 1.05 for i in range(len(optimizer_order))])
+    ax_c.set_xticklabels(optimizer_order, fontsize=11, fontweight="bold")
     ax_c.set_title("(C) Seed Robustness & Distribution (10 Seeds)", fontsize=13, fontweight="bold")
     ax_c.set_ylabel("Final L/D", fontsize=11, fontweight="bold")
     ax_c.grid(True, axis="y")

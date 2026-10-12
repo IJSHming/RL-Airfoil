@@ -21,8 +21,8 @@ class PyBobyqaOptimizer(BaseAirfoilOptimizer):
         seed: int = 42,
         is_meta: bool = False,
         rl_policy: Optional[Any] = None,
-        rhobeg: float = 0.1,
-        rhoend: float = 1e-4,
+        rhobeg: float = 0.12,
+        rhoend: float = 0.0001,
     ):
         super().__init__(evaluator, x0, bounds, max_evals, seed, is_meta, rl_policy)
         self.rhobeg = rhobeg
@@ -46,14 +46,16 @@ class PyBobyqaOptimizer(BaseAirfoilOptimizer):
         specific = np.array([log_delta, log_rho, norm_ratio, grad_norm], dtype=np.float32)
         return np.concatenate([base, specific])
 
-    def apply_action(self, action: np.ndarray):
-        """Action (1维) -> 动态调节信赖域半径 delta 的乘子因子"""
-        scale_delta = np.exp(np.clip(action[0], -1.5, 1.5))
-        self.current_delta = np.clip(
-            self.current_delta * scale_delta,
-            self.current_rho * 0.5,
-            self.rhobeg * 10.0,
-        )
+    def apply_action(self, action: np.ndarray, controller_delta: float, controller_rho: float) -> float:
+        """Action (1维) -> 锚定当前控制器 delta 施加弹性缩放，消除无界累乘漂移"""
+        scale_delta = float(np.exp(np.clip(action[0], -1.0, 1.0) * 0.35))
+        new_delta = float(np.clip(
+            controller_delta * scale_delta,
+            controller_rho * 1.01,
+            self.rhobeg * 4.0,
+        ))
+        self.current_delta = new_delta
+        return new_delta
 
     def run(self) -> Dict[str, Any]:
         self.evaluate_initial()
@@ -77,23 +79,29 @@ class PyBobyqaOptimizer(BaseAirfoilOptimizer):
             optimizer_instance.current_rho = float(controller_self.rho)
 
             # RL-Meta 介入调节
+            action = None
             if optimizer_instance.is_meta and optimizer_instance.rl_policy is not None:
                 state = optimizer_instance.get_state()
                 score_before = optimizer_instance.best_score
                 action = optimizer_instance.rl_policy(state)
-                optimizer_instance.apply_action(action)
-
-                # 将动作应用给控制器实例
-                controller_self.delta = optimizer_instance.current_delta
+                # 动态锚定调节 delta
+                controller_self.delta = optimizer_instance.apply_action(
+                    action,
+                    float(controller_self.delta),
+                    float(controller_self.rho),
+                )
 
             d, gopt, H, gnew, crvmin = orig_tr_step(controller_self, params)
             optimizer_instance.model_grad_norm = float(np.linalg.norm(gopt))
 
-            # 记录经验
-            if optimizer_instance.is_meta and optimizer_instance.rl_policy is not None:
+            # 记录经验 (跨工况自适应归一化稠密奖励)
+            if optimizer_instance.is_meta and action is not None:
                 next_state = optimizer_instance.get_state()
-                reward = (optimizer_instance.best_score - score_before) / 10.0 - 0.01
                 done = (optimizer_instance.eval_count >= optimizer_instance.max_evals)
+                rel_gain = (optimizer_instance.best_score - score_before) / max(optimizer_instance.initial_score, 15.0)
+                reward = rel_gain * 20.0 - 0.002
+                if done:
+                    reward += max((optimizer_instance.best_score - optimizer_instance.initial_score) / 50.0, 0.0) * 0.1
                 optimizer_instance.transitions.append({
                     "state": state,
                     "action": action,

@@ -1,14 +1,17 @@
-"""RL-Meta-Airfoil 强化学习元优化器训练脚本：
-在 10 个雷诺数 (1e6~1e7) 与 11 个攻角 (0~10度) 构成的气动网格上，
-对 SPSA、Py-BOBYQA、GA、PSO、CMA-ES、TuRBO 训练各自专属的 PPO Meta-Policy，
-并保存各优化器的模型权重。
+"""RL-Meta-Airfoil 强化学习元优化器高效并行训练脚本：
+充分利用 HPC 集群 10 核 CPU 并行采集气动经验 + 集中式 PPO 梯度更新。
+采用纯 NumPy 无锁策略推理彻底杜绝多进程 OpenMP/CUDA 死锁。
+在 10 个雷诺数 (1e6~1e7) 与 11 个攻角 (0~10度) 构成的 110 个气动网格工况上，
+为 SPSA、Py-BOBYQA、DE、PSO、CMA-ES、TuRBO 训练各自专属的 Meta-Policy 神经网络权重。
 """
 
 import argparse
+import concurrent.futures
 import os
+import shutil
 import sys
 import time
-from typing import List, Tuple
+from typing import Any, Dict, List, Tuple
 import numpy as np
 import torch
 
@@ -28,76 +31,128 @@ def get_training_grid() -> List[Tuple[float, float]]:
     return grid
 
 
+def numpy_policy_forward(s: np.ndarray, w: Dict[str, np.ndarray], deterministic: bool = False) -> np.ndarray:
+    """纯 NumPy 无锁连续前向推理，彻底杜绝 OpenMP/CUDA 多进程死锁"""
+    s_clean = np.nan_to_num(s, nan=0.0, posinf=5.0, neginf=-5.0)
+    h1 = np.tanh(s_clean @ w["actor_mean.0.weight"].T + w["actor_mean.0.bias"])
+    h2 = np.tanh(h1 @ w["actor_mean.2.weight"].T + w["actor_mean.2.bias"])
+    mean = np.tanh(h2 @ w["actor_mean.4.weight"].T + w["actor_mean.4.bias"])
+    if deterministic:
+        return np.clip(mean, -1.0, 1.0)
+    logstd = np.clip(w["actor_logstd"], -3.0, 0.5)
+    std = np.exp(logstd)
+    noise = np.random.randn(*mean.shape)
+    action = mean + std * noise
+    return np.clip(action, -1.0, 1.0)
+
+
+def worker_rollout(task_tuple: Tuple[str, float, float, int, Dict[str, np.ndarray]]) -> Dict[str, Any]:
+    """单核 CPU 独立工作进程：执行 300 步黑盒气动优化，采集并返回转移经验。"""
+    opt_name, reynolds, alpha, seed, weights = task_tuple
+
+    evaluator = AerodynamicEvaluator(reynolds=reynolds, alpha=alpha)
+    cfg = OPTIMIZER_CONFIGS[opt_name]
+    opt_class = cfg["class"]
+
+    def rl_action_fn(s: np.ndarray) -> np.ndarray:
+        return numpy_policy_forward(s, weights, deterministic=False)
+
+    optimizer = opt_class(
+        evaluator=evaluator,
+        max_evals=300,
+        seed=seed,
+        is_meta=True,
+        rl_policy=rl_action_fn,
+    )
+    res = optimizer.run()
+
+    return {
+        "transitions": optimizer.transitions,
+        "initial_score": float(optimizer.initial_score),
+        "best_score": float(optimizer.best_score),
+        "gain": float(optimizer.best_score - optimizer.initial_score),
+        "reynolds": float(reynolds),
+        "alpha": float(alpha),
+    }
+
+
 def train_single_optimizer(
     opt_name: str,
-    n_episodes: int = 100,
+    n_episodes: int = 110,
+    num_workers: int = 10,
     device: str = "cpu",
     output_dir: str = "weights",
 ):
     print(f"\n=======================================================")
-    print(f" 开始训练 Meta-RL 优化器: {opt_name}")
+    print(f" 开始高效并行训练 Meta-RL 优化器: {opt_name}")
     print(f" 状态维度: {OPTIMIZER_CONFIGS[opt_name]['state_dim']} | 动作维度: {OPTIMIZER_CONFIGS[opt_name]['action_dim']}")
-    print(f" 训练 Episode 轮数: {n_episodes} (每 Episode 消耗 300 次 NFE)")
+    print(f" 并行工作进程: {num_workers} 核 CPU | 集中梯度更新设备: {device}")
+    print(f" 训练 Episode 轮数: {n_episodes} (覆盖 10x11 = 110 气动网格工况)")
     print(f"=======================================================")
 
     cfg = OPTIMIZER_CONFIGS[opt_name]
+    state_dim = cfg["state_dim"]
+    action_dim = cfg["action_dim"]
+
     agent = PPOAgent(
-        state_dim=cfg["state_dim"],
-        action_dim=cfg["action_dim"],
+        state_dim=state_dim,
+        action_dim=action_dim,
         lr=3e-4,
         device=device,
     )
 
     grid = get_training_grid()
     rng = np.random.RandomState(42)
-    # 打乱训练工况顺序，保证全面覆盖 110 种气动网格工况
-    if n_episodes == len(grid):
-        sampled_indices = rng.permutation(len(grid))
-    elif n_episodes < len(grid):
-        sampled_indices = rng.choice(len(grid), size=n_episodes, replace=False)
-    else:
-        sampled_indices = rng.choice(len(grid), size=n_episodes, replace=True)
+    # 随机打乱工况顺序，保证全面而均匀地遍历 110 种气动网格
+    shuffled_indices = rng.permutation(len(grid))
+    sampled_indices = [int(shuffled_indices[i % len(grid)]) for i in range(n_episodes)]
+
+    # 将 110 个 episode 划分为若干批次 (每批 num_workers 个并发)
+    batch_size = max(1, num_workers)
+    n_batches = int(np.ceil(n_episodes / batch_size))
 
     start_time = time.time()
-    recent_improvements = []
+    total_transitions_collected = 0
+    all_gains = []
 
-    for ep in range(n_episodes):
-        cond_idx = sampled_indices[ep]
-        reynolds, alpha = grid[cond_idx]
+    with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
+        for b in range(n_batches):
+            b_start = b * batch_size
+            b_end = min((b + 1) * batch_size, n_episodes)
+            current_batch_indices = sampled_indices[b_start:b_end]
 
-        # 实例化对应工况的气动评估器
-        evaluator = AerodynamicEvaluator(reynolds=reynolds, alpha=alpha)
+            # 导出当前网络参数为纯 NumPy 数组分发给工作进程
+            numpy_weights = {k: v.detach().cpu().numpy() for k, v in agent.network.state_dict().items()}
 
-        # 实例化该优化器并在 Meta-RL 闭环下运行
-        opt_class = cfg["class"]
-        optimizer = opt_class(
-            evaluator=evaluator,
-            max_evals=300,
-            seed=int(1000 + ep),
-            is_meta=True,
-            rl_policy=lambda s: agent.select_action(s, deterministic=False),
-        )
+            tasks = []
+            for ep_offset, cond_idx in enumerate(current_batch_indices):
+                ep_global = b_start + ep_offset
+                reynolds, alpha = grid[cond_idx]
+                seed = int(1000 + ep_global)
+                tasks.append((opt_name, reynolds, alpha, seed, numpy_weights))
 
-        res = optimizer.run()
-        transitions = optimizer.transitions
+            # 10 核 CPU 并行收集 10 个工况的完整 300 步优化经验
+            batch_results = list(executor.map(worker_rollout, tasks))
 
-        # 使用该轮采集到的经验更新 PPO 策略
-        loss_dict = agent.update(transitions)
+            # 汇集本批次的所有转移经验
+            batch_transitions = []
+            batch_gains = []
+            for r in batch_results:
+                batch_transitions.extend(r["transitions"])
+                batch_gains.append(r["gain"])
+                all_gains.append(r["gain"])
 
-        gain = optimizer.best_score - optimizer.initial_score
-        recent_improvements.append(gain)
-        if len(recent_improvements) > 10:
-            recent_improvements.pop(0)
+            total_transitions_collected += len(batch_transitions)
 
-        avg_gain_10 = np.mean(recent_improvements)
+            # 集中式更新 PPO 策略网络
+            loss_dict = agent.update(batch_transitions)
 
-        if (ep + 1) % 10 == 0 or (ep + 1) == n_episodes or ep == 0:
+            recent_avg_gain = float(np.mean(all_gains[-min(20, len(all_gains)):]))
             elapsed = time.time() - start_time
             print(
-                f"[{opt_name:9s}] Ep {ep+1:3d}/{n_episodes} | "
-                f"Re: {reynolds/1e6:.1f}M, AoA: {alpha:4.1f}° | "
-                f"Init L/D: {optimizer.initial_score:6.2f} -> Best L/D: {optimizer.best_score:6.2f} "
-                f"(+{gain:5.2f}, 10-Ep Avg: +{avg_gain_10:5.2f}) | "
+                f"[{opt_name:9s}] Batch {b+1:2d}/{n_batches:2d} (Ep {b_end:3d}/{n_episodes}) | "
+                f"Transitions: +{len(batch_transitions):4d} (Tot: {total_transitions_collected:5d}) | "
+                f"Batch Gain: +{np.mean(batch_gains):5.2f} (20-Ep Avg: +{recent_avg_gain:5.2f}) | "
                 f"Loss(PG: {loss_dict.get('policy_loss', 0.0):.3f}, V: {loss_dict.get('value_loss', 0.0):.2f}) | "
                 f"Time: {elapsed:5.1f}s"
             )
@@ -106,31 +161,55 @@ def train_single_optimizer(
     weight_file = os.path.join(output_dir, f"meta_ppo_{opt_name.lower().replace('-', '_')}.pt")
     agent.save(weight_file)
     print(f">>> {opt_name} Meta-Policy 训练完成，权重保存至: {weight_file}")
+
+    # 若为 DE，同步保存一份 meta_ppo_ga.pt 保持兼容
+    if opt_name == "DE":
+        ga_weight_file = os.path.join(output_dir, "meta_ppo_ga.pt")
+        shutil.copyfile(weight_file, ga_weight_file)
+        print(f">>> 同时输出别名兼容权重: {ga_weight_file}")
+
     return agent
 
 
 def main():
-    parser = argparse.ArgumentParser(description="RL-Meta-Airfoil PPO Training")
-    parser.add_argument("--episodes", type=int, default=110, help="Number of training episodes per optimizer (default: 110 to cover all 10x11 grid points)")
+    parser = argparse.ArgumentParser(description="RL-Meta-Airfoil Multi-Core Parallel PPO Training")
+    parser.add_argument(
+        "--episodes",
+        type=int,
+        default=110,
+        help="Number of training episodes per optimizer (default: 110 covering the full 10x11 grid)",
+    )
     parser.add_argument(
         "--optimizers",
         type=str,
-        default="SPSA,Py-BOBYQA,GA,PSO,CMA-ES,TuRBO",
+        default="SPSA,Py-BOBYQA,DE,PSO,CMA-ES,TuRBO",
         help="Comma-separated list of optimizers to train",
+    )
+    parser.add_argument(
+        "--num_workers",
+        type=int,
+        default=10,
+        help="Number of CPU workers for parallel rollout collection (default: 10)",
     )
     parser.add_argument(
         "--device",
         type=str,
         default="cuda" if torch.cuda.is_available() else "cpu",
-        help="Device to use for training (cuda/cpu)",
+        help="Device to use for PPO training updates (cuda/cpu)",
     )
     parser.add_argument("--output_dir", type=str, default="weights", help="Directory to save model weights")
     args = parser.parse_args()
 
-    target_optimizers = [opt.strip() for opt in args.optimizers.split(",") if opt.strip()]
+    raw_opts = [opt.strip() for opt in args.optimizers.split(",") if opt.strip()]
+    target_optimizers = []
+    for opt in raw_opts:
+        if opt == "GA":
+            target_optimizers.append("DE")
+        else:
+            target_optimizers.append(opt)
 
-    print(f"RL-Meta-Airfoil PPO Training Initialized")
-    print(f"Device: {args.device} | Episodes: {args.episodes}")
+    print(f"RL-Meta-Airfoil Multi-Core Parallel PPO Training Initialized")
+    print(f"Device: {args.device} | Parallel Workers: {args.num_workers} | Episodes: {args.episodes}")
     print(f"Target Optimizers: {target_optimizers}")
 
     total_start = time.time()
@@ -141,12 +220,13 @@ def main():
         train_single_optimizer(
             opt_name=opt_name,
             n_episodes=args.episodes,
+            num_workers=args.num_workers,
             device=args.device,
             output_dir=args.output_dir,
         )
 
     print(f"\n=======================================================")
-    print(f" 全部优化器 Meta-RL 训练完毕！总耗时: {time.time()-total_start:.1f} 秒")
+    print(f" 全部优化器 Meta-RL 并行训练完毕！总耗时: {time.time()-total_start:.1f} 秒")
     print(f"=======================================================")
 
 

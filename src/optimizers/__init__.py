@@ -1,6 +1,7 @@
 from src.optimizers.base import BaseAirfoilOptimizer
 from src.optimizers.spsa import SPSAOptimizer
 from src.optimizers.bobyqa import PyBobyqaOptimizer
+from src.optimizers.de import DEOptimizer
 from src.optimizers.ga import GAOptimizer
 from src.optimizers.pso import PSOOptimizer
 from src.optimizers.cma_es import CMAESOptimizer
@@ -19,11 +20,11 @@ OPTIMIZER_CONFIGS = {
         "action_dim": 1,
         "desc": "Bound Optimization BY Quadratic Approximation",
     },
-    "GA": {
-        "class": GAOptimizer,
+    "DE": {
+        "class": DEOptimizer,
         "state_dim": 11,
         "action_dim": 3,
-        "desc": "Real-Coded Genetic Algorithm",
+        "desc": "Differential Evolution (current-to-best/1/bin)",
     },
     "PSO": {
         "class": PSOOptimizer,
@@ -45,10 +46,14 @@ OPTIMIZER_CONFIGS = {
     },
 }
 
+# 向前兼容 GA 别名
+OPTIMIZER_CONFIGS["GA"] = OPTIMIZER_CONFIGS["DE"]
+
 __all__ = [
     "BaseAirfoilOptimizer",
     "SPSAOptimizer",
     "PyBobyqaOptimizer",
+    "DEOptimizer",
     "GAOptimizer",
     "PSOOptimizer",
     "CMAESOptimizer",
