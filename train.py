@@ -50,8 +50,13 @@ def train_single_optimizer(
 
     grid = get_training_grid()
     rng = np.random.RandomState(42)
-    # 打乱训练工况顺序
-    sampled_indices = rng.choice(len(grid), size=n_episodes, replace=(n_episodes > len(grid)))
+    # 打乱训练工况顺序，保证全面覆盖 110 种气动网格工况
+    if n_episodes == len(grid):
+        sampled_indices = rng.permutation(len(grid))
+    elif n_episodes < len(grid):
+        sampled_indices = rng.choice(len(grid), size=n_episodes, replace=False)
+    else:
+        sampled_indices = rng.choice(len(grid), size=n_episodes, replace=True)
 
     start_time = time.time()
     recent_improvements = []
@@ -106,7 +111,7 @@ def train_single_optimizer(
 
 def main():
     parser = argparse.ArgumentParser(description="RL-Meta-Airfoil PPO Training")
-    parser.add_argument("--episodes", type=int, default=100, help="Number of training episodes per optimizer")
+    parser.add_argument("--episodes", type=int, default=110, help="Number of training episodes per optimizer (default: 110 to cover all 10x11 grid points)")
     parser.add_argument(
         "--optimizers",
         type=str,

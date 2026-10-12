@@ -79,10 +79,14 @@ class PSOOptimizer(BaseAirfoilOptimizer):
             noise = self.rng.uniform(-0.03, 0.03, size=d)
             pos = np.clip(self.x0 + noise, self.lower_bounds, self.upper_bounds)
             positions[i] = pos
-            pbest_positions[i] = pos.copy()
             velocities[i] = self.rng.uniform(-v_max, v_max, size=d)
             score = self.evaluate(pos)
-            pbest_scores[i] = score
+            if score > 0.0:
+                pbest_scores[i] = score
+                pbest_positions[i] = pos.copy()
+            else:
+                pbest_scores[i] = score0
+                pbest_positions[i] = self.x0.copy()
 
         # 群体迭代
         while self.eval_count < self.max_evals:
@@ -120,7 +124,7 @@ class PSOOptimizer(BaseAirfoilOptimizer):
                 )
 
                 score = self.evaluate(positions[i])
-                if score > pbest_scores[i]:
+                if score > 0.0 and score > pbest_scores[i]:
                     pbest_scores[i] = score
                     pbest_positions[i] = positions[i].copy()
 

@@ -107,6 +107,7 @@ class PyBobyqaOptimizer(BaseAirfoilOptimizer):
         # 安装动态钩子
         pybobyqa.controller.Controller.trust_region_step = hooked_trust_region_step
 
+        np.random.seed(self.seed)
         try:
             pybobyqa.solve(
                 objective,
@@ -116,6 +117,7 @@ class PyBobyqaOptimizer(BaseAirfoilOptimizer):
                 maxfun=self.max_evals,
                 rhobeg=self.rhobeg,
                 rhoend=self.rhoend,
+                user_params={"init.random_initial_directions": True},
                 do_logging=False,
                 print_progress=False,
             )

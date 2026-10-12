@@ -67,11 +67,11 @@ class BaseAirfoilOptimizer(ABC):
         score = self.evaluator.evaluate(x_clipped)
         self.eval_count += 1
 
-        is_feasible = (score > 0.0)
+        is_feasible = (score > -5.0)
         self.history_feasible.append(is_feasible)
         self.history_evaluated_scores.append(score)
 
-        if score > self.best_score:
+        if is_feasible and score > self.best_score:
             self.best_score = score
             self.best_x = x_clipped.copy()
             self.stagnation_counter = 0
@@ -89,6 +89,8 @@ class BaseAirfoilOptimizer(ABC):
         """初始评估基准形状 NACA0012"""
         score = self.evaluate(self.x0)
         self.initial_score = score
+        self.best_score = score
+        self.best_x = self.x0.copy()
         return score
 
     def get_base_state(self) -> np.ndarray:
@@ -103,11 +105,16 @@ class BaseAirfoilOptimizer(ABC):
         progress = self.eval_count / max(self.max_evals, 1)
         re_norm = (np.log10(max(self.evaluator.Re, 1e6)) - 6.0) / 1.0
         alpha_norm = self.evaluator.alpha / 10.0
-        gain_norm = (self.best_score - self.initial_score) / 50.0
-        recent_gain = (self.best_score - self.recent_best_window[0]) / 20.0 if self.recent_best_window else 0.0
+        gain_norm = np.clip((self.best_score - self.initial_score) / 50.0, -5.0, 5.0)
+        recent_gain = (
+            np.clip((self.best_score - self.recent_best_window[0]) / 20.0, -5.0, 5.0)
+            if self.recent_best_window
+            else 0.0
+        )
         stag_norm = min(self.stagnation_counter / 30.0, 1.0)
 
-        return np.array([progress, re_norm, alpha_norm, gain_norm, recent_gain, stag_norm], dtype=np.float32)
+        vec = np.array([progress, re_norm, alpha_norm, gain_norm, recent_gain, stag_norm], dtype=np.float32)
+        return np.nan_to_num(vec, nan=0.0, posinf=5.0, neginf=-5.0)
 
     @abstractmethod
     def get_state(self) -> np.ndarray:

@@ -401,6 +401,9 @@ class AerodynamicEvaluator:
             geom_metrics, aero=aero_dict
         )
 
+        if not is_feasible:
+            return min(-10.0, float(raw_ld - 150.0 - total_penalty))
+
         return raw_ld - total_penalty
 
     def evaluate_detailed(self, theta) -> Dict[str, Any]:

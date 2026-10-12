@@ -48,8 +48,10 @@ class ActorCritic(nn.Module):
     def get_action_and_value(
         self, state: torch.Tensor, action: torch.Tensor = None, deterministic: bool = False
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        state = torch.nan_to_num(state, nan=0.0, posinf=5.0, neginf=-5.0)
         action_mean = torch.tanh(self.actor_mean(state))
-        action_logstd = self.actor_logstd.expand_as(action_mean)
+        logstd_clamped = torch.clamp(self.actor_logstd, -3.0, 0.5)
+        action_logstd = logstd_clamped.expand_as(action_mean)
         action_std = torch.exp(action_logstd)
         probs = Normal(action_mean, action_std)
 
@@ -102,9 +104,11 @@ class PPOAgent:
         """根据当前状态输出连续动作向量"""
         self.network.eval()
         with torch.no_grad():
-            state_t = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
+            state_clean = np.nan_to_num(state, nan=0.0, posinf=5.0, neginf=-5.0)
+            state_t = torch.tensor(state_clean, dtype=torch.float32, device=self.device).unsqueeze(0)
             action, _, _, _ = self.network.get_action_and_value(state_t, deterministic=deterministic)
-        return action.squeeze(0).cpu().numpy()
+        act_np = action.squeeze(0).cpu().numpy()
+        return np.nan_to_num(act_np, nan=0.0)
 
     def update(self, rollouts: List[Dict[str, Any]]) -> Dict[str, float]:
         """使用收集到的 rollout 经验进行 PPO 策略与价值网络更新"""
@@ -118,6 +122,11 @@ class PPOAgent:
         rewards = torch.tensor(np.array([float(t["reward"]) for t in rollouts], dtype=np.float32), dtype=torch.float32, device=self.device)
         next_states = torch.tensor(np.array([t["next_state"] for t in rollouts], dtype=np.float32), dtype=torch.float32, device=self.device)
         dones = torch.tensor(np.array([float(bool(t["done"])) for t in rollouts], dtype=np.float32), dtype=torch.float32, device=self.device)
+
+        states = torch.nan_to_num(states, nan=0.0, posinf=5.0, neginf=-5.0)
+        actions = torch.nan_to_num(actions, nan=0.0, posinf=1.0, neginf=-1.0)
+        rewards = torch.clamp(torch.nan_to_num(rewards, nan=0.0), -10.0, 10.0)
+        next_states = torch.nan_to_num(next_states, nan=0.0, posinf=5.0, neginf=-5.0)
 
         with torch.no_grad():
             values = self.network.get_value(states).squeeze(-1)
@@ -136,7 +145,12 @@ class PPOAgent:
             _, old_log_probs, _, _ = self.network.get_action_and_value(states, actions)
 
         # 归一化优势项
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        adv_std = advantages.std()
+        if adv_std > 1e-6:
+            advantages = (advantages - advantages.mean()) / (adv_std + 1e-8)
+        else:
+            advantages = advantages - advantages.mean()
+        advantages = torch.nan_to_num(advantages, nan=0.0)
 
         # PPO 多 Epoch Mini-batch 更新
         dataset_size = len(states)
@@ -176,6 +190,8 @@ class PPOAgent:
                 loss.backward()
                 nn.utils.clip_grad_norm_(self.network.parameters(), self.max_grad_norm)
                 self.optimizer.step()
+                with torch.no_grad():
+                    self.network.actor_logstd.data.clamp_(-3.0, 0.5)
 
                 total_pg_loss += pg_loss.item()
                 total_v_loss += v_loss.item()

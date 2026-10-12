@@ -20,11 +20,11 @@ class SPSAOptimizer(BaseAirfoilOptimizer):
         seed: int = 42,
         is_meta: bool = False,
         rl_policy: Optional[Any] = None,
-        a0: float = 0.006,
-        c0: float = 0.012,
+        a0: float = 0.001,
+        c0: float = 0.015,
         alpha: float = 0.602,
         gamma: float = 0.101,
-        momentum: float = 0.80,
+        momentum: float = 0.70,
     ):
         super().__init__(evaluator, x0, bounds, max_evals, seed, is_meta, rl_policy)
         self.a0 = a0
@@ -65,8 +65,8 @@ class SPSAOptimizer(BaseAirfoilOptimizer):
         self.current_a *= scale_a
         self.current_c *= scale_c
         # 边界约束防护
-        self.current_a = np.clip(self.current_a, 1e-5, 0.05)
-        self.current_c = np.clip(self.current_c, 1e-4, 0.05)
+        self.current_a = np.clip(self.current_a, 1e-5, 0.01)
+        self.current_c = np.clip(self.current_c, 1e-4, 0.03)
 
     def run(self) -> Dict[str, Any]:
         self.evaluate_initial()
@@ -100,10 +100,15 @@ class SPSAOptimizer(BaseAirfoilOptimizer):
                 break
             f_minus = self.evaluate(x_minus)
 
-            # 随机梯度估计 (目标是最大化升阻比)
+            # 随机梯度估计 (目标是最大化升阻比)并进行梯度范数截断保护
             self.last_grad = self.current_grad.copy()
             diff = f_plus - f_minus
-            self.current_grad = (diff / (2.0 * self.current_c)) * delta
+            grad_raw = (diff / (2.0 * self.current_c)) * delta
+            gnorm = float(np.linalg.norm(grad_raw))
+            if gnorm > 200.0:
+                self.current_grad = grad_raw * (200.0 / max(gnorm, 1e-8))
+            else:
+                self.current_grad = grad_raw
 
             # 梯度平滑与动量更新
             self.m = self.momentum * self.m + (1.0 - self.momentum) * self.current_grad

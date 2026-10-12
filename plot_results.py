@@ -104,84 +104,136 @@ def plot_convergence_curves(data: dict, output_dir: str):
 
 
 def plot_bar_comparison(data: dict, output_dir: str):
-    """图 2: 10 次实验最终升阻比的均值柱状对比图与提升幅度"""
+    """图 2: 柱状图对比：
+    1. 生成 6 张独立的优化器 10 随机种子 Vanilla vs RL-Meta 详细对照柱状图
+    2. 生成 1 张 2x3 六合一全景图 (bar_comparison_6panels.png / bar_comparison.png)
+    """
+    results = data["results"]
     summary = {row["optimizer"]: row for row in data["summary"]}
 
-    x = np.arange(len(OPTIMIZER_ORDER))
-    width = 0.36
+    # 1. 生成 6 张独立的单优化器柱状图
+    for opt_name in OPTIMIZER_ORDER:
+        v_runs = results[opt_name]["Vanilla"]
+        m_runs = results[opt_name]["RL-Meta"]
+        n_seeds = len(v_runs)
+        x = np.arange(n_seeds)
+        width = 0.38
 
-    v_means = [summary[opt]["vanilla_mean"] for opt in OPTIMIZER_ORDER]
-    v_stds = [summary[opt]["vanilla_std"] for opt in OPTIMIZER_ORDER]
-    m_means = [summary[opt]["meta_mean"] for opt in OPTIMIZER_ORDER]
-    m_stds = [summary[opt]["meta_std"] for opt in OPTIMIZER_ORDER]
+        v_scores = [r["best_score"] for r in v_runs]
+        m_scores = [r["best_score"] for r in m_runs]
+        seed_labels = [f"S{i+1}\n({r['seed']})" for i, r in enumerate(v_runs)]
 
-    fig, ax = plt.subplots(figsize=(12, 6.5))
-
-    rects1 = ax.bar(
-        x - width / 2,
-        v_means,
-        width,
-        yerr=v_stds,
-        capsize=5,
-        label="Vanilla",
-        color=COLOR_VANILLA,
-        edgecolor="#1E3A8A",
-        linewidth=1.2,
-        alpha=0.88,
-    )
-    rects2 = ax.bar(
-        x + width / 2,
-        m_means,
-        width,
-        yerr=m_stds,
-        capsize=5,
-        label="RL-Meta",
-        color=COLOR_META,
-        edgecolor="#991B1B",
-        linewidth=1.2,
-        alpha=0.88,
-    )
-
-    ax.set_ylabel("Final Penalized L/D ($C_L / C_D$)", fontsize=13, fontweight="bold")
-    ax.set_title(
-        f"Final L/D Comparison: Vanilla vs RL-Meta across 6 Optimizers (10 Seeds, NFE=300)",
-        fontsize=14,
-        fontweight="bold",
-        pad=15,
-    )
-    ax.set_xticks(x)
-    ax.set_xticklabels(OPTIMIZER_ORDER, fontsize=12, fontweight="bold")
-    ax.legend(fontsize=12, loc="upper left")
-    ax.grid(True, axis="y", alpha=0.6)
-
-    # 标注数值与百分比增益
-    for i, opt in enumerate(OPTIMIZER_ORDER):
-        gain = summary[opt]["gain"]
-        pct = summary[opt]["pct_gain"]
-        top = max(v_means[i] + v_stds[i], m_means[i] + m_stds[i])
-        color_text = "#047857" if gain >= 0 else "#B91C1C"
-        ax.annotate(
-            f"{gain:+.1f}\n({pct:+.1f}%)",
-            xy=(x[i] + width / 2, m_means[i]),
-            xytext=(x[i], top + 4.0),
-            ha="center",
-            va="bottom",
-            fontsize=10.5,
-            fontweight="bold",
-            color=color_text,
-            arrowprops=dict(arrowstyle="->", color=color_text, lw=1.2),
+        fig, ax = plt.subplots(figsize=(11, 5.5))
+        rects1 = ax.bar(
+            x - width / 2,
+            v_scores,
+            width,
+            label=f"Vanilla (Mean: {np.mean(v_scores):.2f})",
+            color=COLOR_VANILLA,
+            edgecolor="#1E3A8A",
+            linewidth=1.2,
+            alpha=0.88,
+        )
+        rects2 = ax.bar(
+            x + width / 2,
+            m_scores,
+            width,
+            label=f"RL-Meta (Mean: {np.mean(m_scores):.2f})",
+            color=COLOR_META,
+            edgecolor="#991B1B",
+            linewidth=1.2,
+            alpha=0.88,
         )
 
-    y_max = max(max(v_means), max(m_means)) * 1.22
-    ax.set_ylim(0, y_max)
-    plt.tight_layout()
+        # 均值水平参考辅助线
+        ax.axhline(np.mean(v_scores), color=COLOR_VANILLA, linestyle="--", linewidth=1.5, alpha=0.7)
+        ax.axhline(np.mean(m_scores), color=COLOR_META, linestyle="--", linewidth=1.5, alpha=0.7)
+
+        # 标注柱上数值
+        for rect in rects1:
+            h = rect.get_height()
+            ax.annotate(f"{h:.1f}", xy=(rect.get_x() + rect.get_width() / 2, h),
+                        xytext=(0, 3), textcoords="offset points", ha="center", va="bottom", fontsize=8.5)
+        for rect in rects2:
+            h = rect.get_height()
+            ax.annotate(f"{h:.1f}", xy=(rect.get_x() + rect.get_width() / 2, h),
+                        xytext=(0, 3), textcoords="offset points", ha="center", va="bottom", fontsize=8.5, fontweight="bold")
+
+        gain = np.mean(m_scores) - np.mean(v_scores)
+        pct = (gain / max(abs(np.mean(v_scores)), 1e-4)) * 100.0
+        ax.set_ylabel("Final Penalized L/D ($C_L / C_D$)", fontsize=12, fontweight="bold")
+        ax.set_xlabel("Independent Seeds (NFE=300)", fontsize=12, fontweight="bold")
+        ax.set_title(
+            f"{opt_name}: 10 Independent Seeds Comparison (Vanilla vs RL-Meta | Mean Gain: {gain:+.2f}, {pct:+.1f}%)",
+            fontsize=13,
+            fontweight="bold",
+            pad=12,
+        )
+        ax.set_xticks(x)
+        ax.set_xticklabels(seed_labels, fontsize=10)
+        ax.set_ylim(0, max(max(v_scores), max(m_scores)) * 1.18)
+        ax.grid(True, axis="y", alpha=0.6)
+        ax.legend(loc="upper right", fontsize=11)
+        plt.tight_layout()
+
+        safe_name = opt_name.lower().replace("-", "_")
+        single_png = os.path.join(output_dir, f"bar_comparison_{safe_name}.png")
+        single_pdf = os.path.join(output_dir, f"bar_comparison_{safe_name}.pdf")
+        plt.savefig(single_png, dpi=300, bbox_inches="tight")
+        plt.savefig(single_pdf, bbox_inches="tight")
+        plt.close()
+
+    # 2. 生成 2x3 六合一全景图
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10), sharey=False)
+    axes = axes.flatten()
+
+    for idx, opt_name in enumerate(OPTIMIZER_ORDER):
+        ax = axes[idx]
+        v_runs = results[opt_name]["Vanilla"]
+        m_runs = results[opt_name]["RL-Meta"]
+        n_seeds = len(v_runs)
+        x = np.arange(n_seeds)
+        width = 0.38
+
+        v_scores = [r["best_score"] for r in v_runs]
+        m_scores = [r["best_score"] for r in m_runs]
+        seed_labels = [f"S{i+1}" for i in range(n_seeds)]
+
+        rects1 = ax.bar(x - width / 2, v_scores, width, label="Vanilla", color=COLOR_VANILLA, alpha=0.85)
+        rects2 = ax.bar(x + width / 2, m_scores, width, label="RL-Meta", color=COLOR_META, alpha=0.85)
+
+        ax.axhline(np.mean(v_scores), color=COLOR_VANILLA, linestyle="--", linewidth=1.2, alpha=0.8)
+        ax.axhline(np.mean(m_scores), color=COLOR_META, linestyle="--", linewidth=1.2, alpha=0.8)
+
+        gain = np.mean(m_scores) - np.mean(v_scores)
+        pct = (gain / max(abs(np.mean(v_scores)), 1e-4)) * 100.0
+        ax.set_title(f"{opt_name} (Δ: {gain:+.1f} / {pct:+.1f}%)", fontsize=12, fontweight="bold")
+        ax.set_xticks(x)
+        ax.set_xticklabels(seed_labels, fontsize=9)
+        ax.grid(True, axis="y", alpha=0.5)
+        ax.set_ylim(0, max(max(v_scores), max(m_scores)) * 1.18)
+        if idx in [0, 3]:
+            ax.set_ylabel("Final L/D ($C_L / C_D$)", fontsize=10, fontweight="bold")
+        if idx >= 3:
+            ax.set_xlabel("Seeds", fontsize=10, fontweight="bold")
+        ax.legend(loc="upper right", fontsize=9)
+
+    fig.suptitle(
+        f"10-Seed Detailed Performance Comparison across 6 Optimizers (Vanilla vs RL-Meta)",
+        fontsize=15,
+        fontweight="bold",
+        y=0.98,
+    )
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
 
     png_path = os.path.join(output_dir, "bar_comparison.png")
     pdf_path = os.path.join(output_dir, "bar_comparison.pdf")
+    panels_path = os.path.join(output_dir, "bar_comparison_6panels.png")
     plt.savefig(png_path, dpi=300, bbox_inches="tight")
     plt.savefig(pdf_path, bbox_inches="tight")
+    plt.savefig(panels_path, dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"已生成柱状对比图: {png_path} & {pdf_path}")
+    print(f"已生成 6 张单优化器柱状图与六合一柱状图: {png_path} & {panels_path}")
 
 
 def plot_boxplot_comparison(data: dict, output_dir: str):
