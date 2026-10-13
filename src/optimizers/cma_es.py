@@ -21,8 +21,8 @@ class CMAESOptimizer(BaseAirfoilOptimizer):
         seed: int = 42,
         is_meta: bool = False,
         rl_policy: Optional[Any] = None,
-        sigma0: float = 0.035,
-        pop_size: int = 10,
+        sigma0: float = 0.05,
+        pop_size: int = 12,
     ):
         super().__init__(evaluator, x0, bounds, max_evals, seed, is_meta, rl_policy)
         self.sigma0 = sigma0
@@ -106,10 +106,10 @@ class CMAESOptimizer(BaseAirfoilOptimizer):
                 done = bool(self.eval_count >= self.max_evals or bool(es.stop()))
                 rel_gain = (self.best_score - score_before) / max(self.initial_score, 15.0)
                 reward = rel_gain * 30.0 - 0.002
-                if self.best_score > 205.0 and score_before <= 205.0:
-                    reward += 1.0  # 突破 205 门槛里程碑
-                if self.best_score > 218.0 and score_before <= 218.0:
-                    reward += 2.0  # 冲刺 218+ 巅峰大奖
+                if self.best_score > 195.0 and score_before <= 195.0:
+                    reward += 1.0  # 突破 195 门槛里程碑
+                if self.best_score > 210.0 and score_before <= 210.0:
+                    reward += 2.0  # 冲刺 210+ 巅峰大奖
                 if done:
                     reward += max((self.best_score - self.initial_score) / 50.0, 0.0) * 0.25
                 self.transitions.append({

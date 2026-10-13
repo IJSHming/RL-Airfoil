@@ -20,10 +20,10 @@ class PSOOptimizer(BaseAirfoilOptimizer):
         seed: int = 42,
         is_meta: bool = False,
         rl_policy: Optional[Any] = None,
-        swarm_size: int = 12,
-        w: float = 0.78,
-        c1: float = 1.4,
-        c2: float = 1.8,
+        swarm_size: int = 15,
+        w: float = 0.7298,
+        c1: float = 1.496,
+        c2: float = 1.496,
     ):
         super().__init__(evaluator, x0, bounds, max_evals, seed, is_meta, rl_policy)
         self.swarm_size = swarm_size
@@ -33,6 +33,7 @@ class PSOOptimizer(BaseAirfoilOptimizer):
         self.w = w
         self.c1 = c1
         self.c2 = c2
+        self.v_max_factor = 0.10
 
         # 跟踪统计特征
         self.swarm_diversity = 0.0
@@ -52,11 +53,15 @@ class PSOOptimizer(BaseAirfoilOptimizer):
         return np.concatenate([base, specific])
 
     def apply_action(self, action: np.ndarray):
-        """Action (3维) -> 锚定最优基准超参 [w=0.78, c1=1.4, c2=1.8] 进行弹性调节"""
-        a1, a2, a3 = float(action[0]), float(action[1]), float(action[2])
-        self.w = float(np.clip(self.base_w + 0.15 * np.clip(a1, -1.0, 1.0), 0.40, 0.92))
-        self.c1 = float(np.clip(self.base_c1 + 0.35 * np.clip(a2, -1.0, 1.0), 0.60, 2.40))
-        self.c2 = float(np.clip(self.base_c2 + 0.35 * np.clip(a3, -1.0, 1.0), 0.80, 2.60))
+        """Action (3维) -> 动态调节 PSO [w, c1, c2]，在严格保持 Clerc-Kennedy 收敛边界前提下赋能动态脱困活力"""
+        a1 = float(action[0])
+        a2 = float(action[1])
+        stag_ratio = min(self.stagnation_counter / 15.0, 1.0)
+        w_target = self.base_w + 0.045 * stag_ratio + 0.005 * np.clip(a1, -1.0, 1.0)
+        self.w = float(np.clip(w_target, 0.725, 0.785))
+        c_shift = -0.05 * stag_ratio + 0.01 * np.clip(a2, -1.0, 1.0)
+        self.c1 = float(np.clip(self.base_c1 + c_shift, 1.35, 1.65))
+        self.c2 = float(np.clip(self.base_c2 - c_shift, 1.35, 1.65))
 
     def run(self) -> Dict[str, Any]:
         d = len(self.x0)
@@ -107,6 +112,9 @@ class PSOOptimizer(BaseAirfoilOptimizer):
                 self.w = self.base_w
                 self.c1 = self.base_c1
                 self.c2 = self.base_c2
+                self.v_max_factor = 0.10
+
+            v_max = self.v_max_factor * (self.upper_bounds - self.lower_bounds)
 
             # 更新粒子速度与位置
             gbest = self.best_x.copy()
@@ -134,14 +142,21 @@ class PSOOptimizer(BaseAirfoilOptimizer):
                     pbest_scores[i] = score
                     pbest_positions[i] = positions[i].copy()
 
-            # 记录经验 (跨工况自适应归一化稠密奖励)
+            # 记录经验 (跨工况自适应归一化稠密奖励与突破里程碑奖励)
             if self.is_meta and action is not None:
                 next_state = self.get_state()
                 done = (self.eval_count >= self.max_evals)
+                prog = self.eval_count / max(self.max_evals, 1)
                 rel_gain = (self.best_score - score_before) / max(self.initial_score, 15.0)
-                reward = rel_gain * 20.0 - 0.002
+                reward = rel_gain * (15.0 + 35.0 * prog) - 0.01
+                if self.best_score > 196.0 and score_before <= 196.0:
+                    reward += 1.5  # 突破 196 基准
+                if self.best_score > 206.0 and score_before <= 206.0:
+                    reward += 3.0  # 突破 206 卓越水平
+                if self.best_score > 218.0 and score_before <= 218.0:
+                    reward += 5.0  # 突破 218 极致水平
                 if done:
-                    reward += max((self.best_score - self.initial_score) / 50.0, 0.0) * 0.1
+                    reward += max((self.best_score - self.initial_score) / 30.0, 0.0) * 0.50
                 self.transitions.append({
                     "state": state,
                     "action": action,

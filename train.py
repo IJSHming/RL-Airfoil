@@ -94,10 +94,13 @@ def train_single_optimizer(
     state_dim = cfg["state_dim"]
     action_dim = cfg["action_dim"]
 
+    lr = 2e-4 if opt_name == "PSO" else 3e-4
+    epochs = 4 if opt_name == "PSO" else 8
     agent = PPOAgent(
         state_dim=state_dim,
         action_dim=action_dim,
-        lr=3e-4,
+        lr=lr,
+        update_epochs=epochs,
         device=device,
     )
 

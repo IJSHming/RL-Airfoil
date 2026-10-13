@@ -21,7 +21,7 @@ class PyBobyqaOptimizer(BaseAirfoilOptimizer):
         seed: int = 42,
         is_meta: bool = False,
         rl_policy: Optional[Any] = None,
-        rhobeg: float = 0.12,
+        rhobeg: float = 0.10,
         rhoend: float = 0.0001,
     ):
         super().__init__(evaluator, x0, bounds, max_evals, seed, is_meta, rl_policy)
@@ -99,9 +99,13 @@ class PyBobyqaOptimizer(BaseAirfoilOptimizer):
                 next_state = optimizer_instance.get_state()
                 done = (optimizer_instance.eval_count >= optimizer_instance.max_evals)
                 rel_gain = (optimizer_instance.best_score - score_before) / max(optimizer_instance.initial_score, 15.0)
-                reward = rel_gain * 20.0 - 0.002
+                reward = rel_gain * 30.0 - 0.002
+                if optimizer_instance.best_score > 150.0 and score_before <= 150.0:
+                    reward += 1.0  # 突破 150 基准
+                if optimizer_instance.best_score > 175.0 and score_before <= 175.0:
+                    reward += 2.0  # 突破 175 卓越水平
                 if done:
-                    reward += max((optimizer_instance.best_score - optimizer_instance.initial_score) / 50.0, 0.0) * 0.1
+                    reward += max((optimizer_instance.best_score - optimizer_instance.initial_score) / 50.0, 0.0) * 0.25
                 optimizer_instance.transitions.append({
                     "state": state,
                     "action": action,

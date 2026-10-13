@@ -267,6 +267,7 @@ def plot_boxplot_comparison(data: dict, output_dir: str):
         widths=0.6,
         patch_artist=True,
         showmeans=True,
+        showfliers=False,  # 取消默认空心离群点，避免与全样本实心散点重叠
         meanprops=dict(marker="o", markeredgecolor="black", markerfacecolor="white", markersize=6),
         medianprops=dict(color="#111827", linewidth=2.0),
     )
@@ -290,7 +291,13 @@ def plot_boxplot_comparison(data: dict, output_dir: str):
     ax.set_xticklabels(optimizer_order, fontsize=12, fontweight="bold")
     ax.grid(True, axis="y", alpha=0.6)
 
-    # 自定义图例
+    # 智能预留顶部空间，防止图例遮挡最高箱体
+    all_scores = [s for sublist in box_data for s in sublist]
+    y_min = max(0, min(all_scores) - 15)
+    y_max = max(all_scores) + 35
+    ax.set_ylim(y_min, y_max)
+
+    # 自定义图例 (横向排列于顶部，避免遮挡数据箱体)
     from matplotlib.patches import Patch
     from matplotlib.lines import Line2D
     legend_elements = [
@@ -298,7 +305,7 @@ def plot_boxplot_comparison(data: dict, output_dir: str):
         Patch(facecolor=COLOR_META, edgecolor="#333333", alpha=0.7, label="RL-Meta"),
         Line2D([0], [0], marker="o", color="w", markerfacecolor="white", markeredgecolor="black", markersize=7, label="Mean Value"),
     ]
-    ax.legend(handles=legend_elements, loc="upper left", fontsize=11)
+    ax.legend(handles=legend_elements, loc="upper right", ncol=3, fontsize=11, framealpha=0.9)
 
     plt.tight_layout()
     png_path = os.path.join(output_dir, "boxplot_comparison.png")
@@ -435,7 +442,9 @@ def plot_comprehensive_overview(data: dict, output_dir: str):
     ax_b.set_xticklabels(optimizer_order, fontsize=11, fontweight="bold")
     ax_b.set_title("(B) Final L/D Performance Comparison", fontsize=13, fontweight="bold")
     ax_b.set_ylabel("Final L/D", fontsize=11, fontweight="bold")
-    ax_b.legend(loc="upper left", fontsize=11)
+    max_b_val = max(max(v_means), max(m_means))
+    ax_b.set_ylim(0, max_b_val * 1.25)  # 留出充足顶部空间，防止图例遮挡柱体
+    ax_b.legend(loc="upper left", ncol=2, fontsize=10.5, framealpha=0.9)
     ax_b.grid(True, axis="y")
 
     # Panel C: 箱线图对比
@@ -450,7 +459,7 @@ def plot_comprehensive_overview(data: dict, output_dir: str):
         box_data.extend([v_scores, m_scores])
         colors.extend([COLOR_VANILLA, COLOR_META])
 
-    bp = ax_c.boxplot(box_data, positions=positions, widths=0.55, patch_artist=True)
+    bp = ax_c.boxplot(box_data, positions=positions, widths=0.55, patch_artist=True, showfliers=False)
     for patch, c in zip(bp["boxes"], colors):
         patch.set_facecolor(c)
         patch.set_alpha(0.75)
@@ -460,7 +469,7 @@ def plot_comprehensive_overview(data: dict, output_dir: str):
     ax_c.set_ylabel("Final L/D", fontsize=11, fontweight="bold")
     ax_c.grid(True, axis="y")
 
-    # Panel D: 代表性翼型几何对照 (以 CMA-ES 与 TuRBO 为例)
+    # Panel D: 代表性翼型几何对照 (以 CMA-ES 与 TuRBO 为例) - 按要求取消图例显示
     ax_d = fig.add_subplot(gs[1, 1])
     from src.airfoil_utils import get_naca0012_theta, theta_to_coordinates
     naca_c = theta_to_coordinates(get_naca0012_theta())
@@ -474,7 +483,7 @@ def plot_comprehensive_overview(data: dict, output_dir: str):
     ax_d.set_title("(D) Airfoil Geometry Profiling (TuRBO 5th Median)", fontsize=13, fontweight="bold")
     ax_d.set_xlabel("x / c", fontsize=11, fontweight="bold")
     ax_d.set_ylabel("y / c", fontsize=11, fontweight="bold")
-    ax_d.legend(loc="upper right", fontsize=10.5)
+    # Subplot D: 取消图例显示 (per user request)
     ax_d.grid(True, linestyle=":")
 
     fig.suptitle("RL-Meta-Airfoil Comprehensive Meta-Optimization Benchmark Summary", fontsize=16, fontweight="bold", y=0.98)

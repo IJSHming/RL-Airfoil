@@ -34,7 +34,7 @@ class TuRBOOptimizer(BaseAirfoilOptimizer):
         length_min: float = 0.5**7,
         length_max: float = 1.6,
         length_init: float = 0.8,
-        success_tol: int = 2,
+        success_tol: int = 3,
         failure_tol: int = 4,
     ):
         super().__init__(evaluator, x0, bounds, max_evals, seed, is_meta, rl_policy)
@@ -197,10 +197,10 @@ class TuRBOOptimizer(BaseAirfoilOptimizer):
                 done = (self.eval_count >= self.max_evals)
                 rel_gain = (self.best_score - score_before) / max(self.initial_score, 15.0)
                 reward = rel_gain * 30.0 - 0.003
-                if self.best_score > 210.0 and score_before <= 210.0:
-                    reward += 1.0  # 突破 210 门槛奖励
-                if self.best_score > 225.0 and score_before <= 225.0:
-                    reward += 2.0  # 冲刺 225+ 巅峰大奖
+                if self.best_score > 205.0 and score_before <= 205.0:
+                    reward += 1.0  # 突破 205 门槛奖励
+                if self.best_score > 220.0 and score_before <= 220.0:
+                    reward += 2.0  # 冲刺 220+ 巅峰大奖
                 if done:
                     reward += max((self.best_score - self.initial_score) / 50.0, 0.0) * 0.25
                 self.transitions.append({

@@ -21,11 +21,11 @@ class SPSAOptimizer(BaseAirfoilOptimizer):
         seed: int = 42,
         is_meta: bool = False,
         rl_policy: Optional[Any] = None,
-        a0: float = 0.0008,
-        c0: float = 0.020,
+        a0: float = 0.020,
+        c0: float = 0.030,
         alpha: float = 0.602,
         gamma: float = 0.101,
-        momentum: float = 0.75,
+        momentum: float = 0.0,
     ):
         super().__init__(evaluator, x0, bounds, max_evals, seed, is_meta, rl_policy)
         self.a0 = a0
@@ -59,17 +59,17 @@ class SPSAOptimizer(BaseAirfoilOptimizer):
         return np.concatenate([base, specific])
 
     def apply_action(self, action: np.ndarray, vanilla_a: float = None, vanilla_c: float = None):
-        """Action (2维) -> 锚定 Spall 理论衰减基准进行动态弹性调节，彻底废除无界指数累乘"""
+        """Action (2维) -> 锚定 Spall 理论衰减基准进行大幅动态弹性伸缩"""
         if vanilla_a is None:
             vanilla_a = self.a0 / (1.0 + self.iter_k / 20.0) ** self.alpha_exp
         if vanilla_c is None:
             vanilla_c = self.c0 / (1.0 + self.iter_k) ** self.gamma_exp
 
-        scale_a = float(np.exp(np.clip(action[0], -1.0, 1.0) * 0.40))
-        scale_c = float(np.exp(np.clip(action[1], -1.0, 1.0) * 0.40))
+        scale_a = float(np.exp(np.clip(action[0], -1.0, 1.0) * 1.50))
+        scale_c = float(np.exp(np.clip(action[1], -1.0, 1.0) * 1.20))
 
-        self.current_a = float(np.clip(vanilla_a * scale_a, 1e-5, 0.008))
-        self.current_c = float(np.clip(vanilla_c * scale_c, 1e-4, 0.040))
+        self.current_a = float(np.clip(vanilla_a * scale_a, 1e-5, 0.08))
+        self.current_c = float(np.clip(vanilla_c * scale_c, 1e-4, 0.10))
 
     def run(self) -> Dict[str, Any]:
         self.evaluate_initial()
@@ -125,11 +125,15 @@ class SPSAOptimizer(BaseAirfoilOptimizer):
             if self.is_meta and action is not None:
                 next_state = self.get_state()
                 done = (self.eval_count >= self.max_evals)
-                # 跨工况自适应归一化稠密奖励
+                # 跨工况自适应归一化稠密奖励与突破里程碑奖励
                 rel_gain = (self.best_score - score_before) / max(self.initial_score, 15.0)
-                reward = rel_gain * 20.0 - 0.002
+                reward = rel_gain * 30.0 - 0.002
+                if self.best_score > 120.0 and score_before <= 120.0:
+                    reward += 1.0  # 冲出初级瓶颈
+                if self.best_score > 160.0 and score_before <= 160.0:
+                    reward += 2.0  # 冲刺高级升阻比盆地
                 if done:
-                    reward += max((self.best_score - self.initial_score) / 50.0, 0.0) * 0.1
+                    reward += max((self.best_score - self.initial_score) / 50.0, 0.0) * 0.25
                 self.transitions.append({
                     "state": state,
                     "action": action,
