@@ -55,12 +55,23 @@ class DEOptimizer(BaseAirfoilOptimizer):
         return np.concatenate([base, specific])
 
     def apply_action(self, action: np.ndarray):
-        """Action (3维) -> 锚定最优基准超参 [CR=0.85, F=0.85, sigma_m=0.003] 进行精细弹性微调"""
+        """Action (3维) -> 动态调节差分进化超参 [CR, F, sigma_m] (平滑动量演进与全周期探索保底)"""
         a1, a2, a3 = float(action[0]), float(action[1]), float(action[2])
-        self.CR = float(np.clip(self.base_cr + 0.05 * np.clip(a1, -1.0, 1.0), 0.70, 0.95))
-        self.F = float(np.clip(self.base_f + 0.05 * np.clip(a2, -1.0, 1.0), 0.70, 0.95))
-        scale_sigma = float(np.exp(np.clip(a3, -1.0, 1.0) * 0.25))
-        self.sigma_m = float(np.clip(self.base_sigma_m * scale_sigma, 0.001, 0.008))
+        # 目标参数：约束在保证全局跨越能力的黄金探索区间 [0.82, 0.96]
+        cr_target = float(np.clip(self.base_cr + 0.08 * np.clip(a1, -1.0, 1.0), 0.82, 0.96))
+        f_target = float(np.clip(self.base_f + 0.08 * np.clip(a2, -1.0, 1.0), 0.82, 0.96))
+        scale_sigma = float(np.exp(np.clip(a3, -1.0, 1.0) * 0.40))
+        sig_target = float(np.clip(self.base_sigma_m * scale_sigma, 0.0015, 0.008))
+
+        # 动量平滑滤波，防止代际间参数剧烈震荡
+        self.CR = float(0.4 * self.CR + 0.6 * cr_target)
+        self.F = float(0.4 * self.F + 0.6 * f_target)
+        self.sigma_m = float(0.4 * self.sigma_m + 0.6 * sig_target)
+
+        # 前程探索兜底 (前 100 次评估强制保持高探索性，杜绝过早陷入局部死区)
+        if self.eval_count < 100:
+            self.CR = max(self.CR, 0.84)
+            self.F = max(self.F, 0.84)
 
     def run(self) -> Dict[str, Any]:
         d = len(self.x0)
@@ -135,14 +146,18 @@ class DEOptimizer(BaseAirfoilOptimizer):
                     population[i] = trial
                     fitnesses[i] = trial_fit
 
-            # 记录 RL 转移
+            # 记录 RL 转移 (跨工况自适应归一化稠密奖励与突破里程碑激励)
             if self.is_meta and action is not None:
                 next_state = self.get_state()
                 done = (self.eval_count >= self.max_evals)
                 rel_gain = (self.best_score - score_before) / max(self.initial_score, 15.0)
-                reward = rel_gain * 20.0 - 0.002
+                reward = rel_gain * 30.0 - 0.002
+                if self.best_score > 195.0 and score_before <= 195.0:
+                    reward += 1.0  # 突破 195 门槛里程碑
+                if self.best_score > 210.0 and score_before <= 210.0:
+                    reward += 2.0  # 冲刺 210+ 巅峰大奖
                 if done:
-                    reward += max((self.best_score - self.initial_score) / 50.0, 0.0) * 0.1
+                    reward += max((self.best_score - self.initial_score) / 50.0, 0.0) * 0.25
                 self.transitions.append({
                     "state": state,
                     "action": action,

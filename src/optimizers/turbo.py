@@ -65,10 +65,14 @@ class TuRBOOptimizer(BaseAirfoilOptimizer):
         return np.concatenate([base, specific])
 
     def apply_action(self, action: np.ndarray):
-        """Action (2维) -> [信赖域尺度弹性乘子, 汤普森采样探索温度] (锚定基准，消除无界累乘)"""
-        scale_L = float(np.exp(np.clip(action[0], -1.0, 1.0) * 0.35))
+        """Action (2维) -> [信赖域尺度弹性乘子, 汤普森采样探索温度] (停滞自适应温控与尺度调节)"""
+        scale_L = float(np.exp(np.clip(action[0], -1.0, 1.0) * 0.45))
         self.L = float(np.clip(self.base_L * scale_L, self.L_min, self.L_max))
-        self.temperature = float(np.exp(np.clip(action[1], -1.0, 1.0) * 0.40))
+        temp_scale = float(np.exp(np.clip(action[1], -1.0, 1.0) * 0.40))
+        if self.stagnation_counter > 5:
+            self.temperature = float(np.clip(temp_scale * 1.35, 0.8, 2.2))
+        else:
+            self.temperature = float(np.clip(temp_scale, 0.75, 1.25))
 
     def run(self) -> Dict[str, Any]:
         d = len(self.x0)
@@ -113,12 +117,13 @@ class TuRBOOptimizer(BaseAirfoilOptimizer):
                 self.L = self.base_L
                 self.temperature = 1.0
 
-            # 目标标准化
+            # 目标标准化 (将不可行重度负惩罚截断至 0，保护 GP 代理模型在可行域的精细分辨率)
             X_arr = np.array(X_train, dtype=np.float64)
             Y_arr = np.array(Y_train, dtype=np.float64)
-            y_mean = float(np.mean(Y_arr))
-            y_std = float(max(np.std(Y_arr), 1e-4))
-            Y_norm = (Y_arr - y_mean) / y_std
+            Y_gp = np.maximum(Y_arr, 0.0)
+            y_mean = float(np.mean(Y_gp))
+            y_std = float(max(np.std(Y_gp), 1e-4))
+            Y_norm = (Y_gp - y_mean) / y_std
 
             # 计算核矩阵并进行 Cholesky 分解
             n_pts = len(X_arr)
@@ -186,14 +191,18 @@ class TuRBOOptimizer(BaseAirfoilOptimizer):
                     self.base_L = self.L_init  # TuRBO 标准重启机制：信赖域收敛塌缩后重置展开，跳出局部陷阱
                 self.n_failure = 0
 
-            # 记录经验 (跨工况自适应归一化稠密奖励)
+            # 记录经验 (跨工况自适应归一化稠密奖励与突破里程碑激励)
             if self.is_meta and action is not None:
                 next_state = self.get_state()
                 done = (self.eval_count >= self.max_evals)
                 rel_gain = (self.best_score - score_before) / max(self.initial_score, 15.0)
-                reward = rel_gain * 20.0 - 0.002
+                reward = rel_gain * 30.0 - 0.003
+                if self.best_score > 210.0 and score_before <= 210.0:
+                    reward += 1.0  # 突破 210 门槛奖励
+                if self.best_score > 225.0 and score_before <= 225.0:
+                    reward += 2.0  # 冲刺 225+ 巅峰大奖
                 if done:
-                    reward += max((self.best_score - self.initial_score) / 50.0, 0.0) * 0.1
+                    reward += max((self.best_score - self.initial_score) / 50.0, 0.0) * 0.25
                 self.transitions.append({
                     "state": state,
                     "action": action,

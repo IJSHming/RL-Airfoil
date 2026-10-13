@@ -89,10 +89,19 @@ def run_benchmark(
     print(f" 每轮评估预算: {max_evals} 次 NFE")
     print(f"=======================================================\n")
 
-    evaluator = AerodynamicEvaluator(reynolds=reynolds, alpha=alpha)
-
     results: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
-    summary_table = []
+    summary_dict: Dict[str, Dict[str, Any]] = {}
+
+    json_path = os.path.join(output_dir, "benchmark_results.json")
+    if os.path.exists(json_path):
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                existing_data = json.load(f)
+                results = existing_data.get("results", {})
+                for row in existing_data.get("summary", []):
+                    summary_dict[row["optimizer"]] = row
+        except Exception:
+            pass
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
         for opt_name in target_optimizers:
@@ -189,7 +198,7 @@ def run_benchmark(
             improvement = m_mean - v_mean
             pct_imp = (improvement / max(abs(v_mean), 1e-4)) * 100.0
 
-            summary_table.append({
+            summary_dict[opt_name] = {
                 "optimizer": opt_name,
                 "vanilla_mean": v_mean,
                 "vanilla_std": v_std,
@@ -197,7 +206,7 @@ def run_benchmark(
                 "meta_std": m_std,
                 "gain": improvement,
                 "pct_gain": pct_imp,
-            })
+            }
 
             print(
                 f"--> [{opt_name:9s}] 10-Seed 并行测试完成 (耗时: {elapsed:.1f}s) | "
@@ -205,6 +214,9 @@ def run_benchmark(
                 f"RL-Meta: {m_mean:.2f} ± {m_std:.2f} | "
                 f"提升: {improvement:+.2f} ({pct_imp:+.1f}%)\n"
             )
+
+    # 汇总体系统计
+    summary_table = [summary_dict[k] for k in TARGET_OPTIMIZERS if k in summary_dict]
 
     # 保存实验数据
     os.makedirs(output_dir, exist_ok=True)
@@ -226,13 +238,15 @@ def run_benchmark(
             ensure_ascii=False,
         )
 
-    # 同时保存高紧凑 npz 格式供绘图快速读取
+    # 同时保存高紧凑 npz 格式供绘图快速读取 (涵盖所有已跑出的算法)
     npz_data = {}
-    for opt_name in target_optimizers:
-        v_hist = np.array([r["history"] for r in results[opt_name]["Vanilla"]])
-        m_hist = np.array([r["history"] for r in results[opt_name]["RL-Meta"]])
-        npz_data[f"{opt_name}_vanilla_history"] = v_hist
-        npz_data[f"{opt_name}_meta_history"] = m_hist
+    for opt_name in results.keys():
+        if "Vanilla" in results[opt_name] and "RL-Meta" in results[opt_name]:
+            if len(results[opt_name]["Vanilla"]) > 0 and len(results[opt_name]["RL-Meta"]) > 0:
+                v_hist = np.array([r["history"] for r in results[opt_name]["Vanilla"]])
+                m_hist = np.array([r["history"] for r in results[opt_name]["RL-Meta"]])
+                npz_data[f"{opt_name}_vanilla_history"] = v_hist
+                npz_data[f"{opt_name}_meta_history"] = m_hist
 
     npz_path = os.path.join(output_dir, "benchmark_results.npz")
     np.savez_compressed(npz_path, **npz_data)

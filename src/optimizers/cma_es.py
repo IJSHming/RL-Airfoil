@@ -45,9 +45,11 @@ class CMAESOptimizer(BaseAirfoilOptimizer):
         return np.concatenate([base, specific])
 
     def apply_action(self, action: np.ndarray, es: cma.CMAEvolutionStrategy):
-        """Action (1维) -> 动态调节当前进化策略的全局步长 sigma (温和弹性缩放)"""
-        scale_sigma = float(np.exp(np.clip(action[0], -1.0, 1.0) * 0.30))
-        new_sigma = float(np.clip(es.sigma * scale_sigma, 1e-4, 0.15))
+        """Action (1维) -> 动态调节当前进化策略的全局步长 sigma (前中期防塌陷，后期精细收敛)"""
+        scale_sigma = float(np.exp(np.clip(action[0], -1.0, 1.0) * 0.45))
+        # 前中期 (eval < 220) 强制维持至少 0.006 步长防止过早陷入局部极小
+        min_allowed_sigma = 0.006 if self.eval_count < 220 else 1e-4
+        new_sigma = float(np.clip(es.sigma * scale_sigma, min_allowed_sigma, 0.18))
         es.sigma = new_sigma
         self.current_sigma = new_sigma
 
@@ -98,14 +100,18 @@ class CMAESOptimizer(BaseAirfoilOptimizer):
 
             es.tell(X, fitnesses_to_tell)
 
-            # 记录经验 (跨工况自适应归一化稠密奖励)
+            # 记录经验 (跨工况自适应归一化稠密奖励与巅峰里程碑激励)
             if self.is_meta and action is not None:
                 next_state = self.get_state()
                 done = bool(self.eval_count >= self.max_evals or bool(es.stop()))
                 rel_gain = (self.best_score - score_before) / max(self.initial_score, 15.0)
-                reward = rel_gain * 20.0 - 0.002
+                reward = rel_gain * 30.0 - 0.002
+                if self.best_score > 205.0 and score_before <= 205.0:
+                    reward += 1.0  # 突破 205 门槛里程碑
+                if self.best_score > 218.0 and score_before <= 218.0:
+                    reward += 2.0  # 冲刺 218+ 巅峰大奖
                 if done:
-                    reward += max((self.best_score - self.initial_score) / 50.0, 0.0) * 0.1
+                    reward += max((self.best_score - self.initial_score) / 50.0, 0.0) * 0.25
                 self.transitions.append({
                     "state": state,
                     "action": action,
