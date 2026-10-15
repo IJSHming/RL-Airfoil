@@ -352,9 +352,14 @@ def run_malibo_single_seed(
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    evaluator = AerodynamicEvaluator(reynolds=reynolds, alpha=alpha)
-    x0 = get_naca0012_theta()
-    lb, ub = get_kulfan_bounds(x0)
+    from evaluator import AerodynamicEvaluator as MetaCFDEvaluator
+    evaluator = MetaCFDEvaluator(reynolds=reynolds, alpha=alpha)
+    from malibo_dataset_generator.airfoil_baselines import (
+        get_airfoil_bounds,
+        get_airfoil_parameters,
+    )
+    x0 = get_airfoil_parameters("naca0012")
+    lb, ub = get_airfoil_bounds(x0)
 
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     num_tasks = ckpt.get("num_tasks", 550)
@@ -483,6 +488,8 @@ def run_full_benchmark(
     alpha: float = 3.5,
     max_evals: int = 300,
     seeds: List[int] = BENCHMARK_SEEDS,
+    skip_llm: bool = False,
+    skip_malibo: bool = False,
 ):
     print("=" * 80)
     print(" 开始 LLM-Meta-TuRBO 与 MALIBO 10 随机种子基准对比测试")
@@ -506,62 +513,81 @@ def run_full_benchmark(
     print(f"  - Vanilla-TuRBO: 均值={np.mean(v_scores):.2f} ± {np.std(v_scores):.2f}, 最大={np.max(v_scores):.2f}")
     print(f"  - RL-Meta-TuRBO: 均值={np.mean(r_scores):.2f} ± {np.std(r_scores):.2f}, 最大={np.max(r_scores):.2f}")
 
-    # 2. 运行 MALIBO
-    print(f"\n[2/4] 启动 MALIBO 元学习贝叶斯优化测试 (10 个随机种子)...")
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    malibo_results = []
-    for idx, s in enumerate(seeds):
-        t_start = time.time()
-        print(f"  >>> [MALIBO Seed {s} ({idx+1}/{len(seeds)})] 正在执行 300 步优化...")
-        res_s = run_malibo_single_seed(
-            seed=s,
-            reynolds=reynolds,
-            alpha=alpha,
-            max_evals=max_evals,
-            checkpoint_path=checkpoint_path,
-            device=device,
-        )
-        malibo_results.append(res_s)
-        print(f"      --> 完成! 耗时: {res_s['elapsed_seconds']:.1f}s | 最终升阻比: {res_s['best_score']:.2f}")
+    # 读取可能已存在的持久化文件，供复用
+    prev_saved_results = {}
+    if os.path.exists(output_json_path):
+        try:
+            with open(output_json_path, "r", encoding="utf-8") as f:
+                prev_saved_results = json.load(f).get("results", {})
+        except Exception:
+            pass
 
-        # 中途持久化防掉电
-        partial_payload = {
-            "condition": {"airfoil": "NACA0012", "reynolds": reynolds, "alpha": alpha, "max_evals": max_evals, "seeds": seeds},
-            "results": {
-                "Vanilla-TuRBO": vanilla_turbo_data,
-                "RL-Meta-TuRBO": rl_meta_turbo_data,
-                "MALIBO": malibo_results,
+    # 2. 运行 MALIBO
+    if skip_malibo and "MALIBO" in prev_saved_results:
+        print(f"\n[2/4] 跳过 MALIBO 重新评测，直接复用已有 10 种子实验数据...")
+        malibo_results = prev_saved_results["MALIBO"]
+    else:
+        print(f"\n[2/4] 启动 MALIBO 元学习贝叶斯优化测试 (10 个随机种子)...")
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        malibo_results = []
+        for idx, s in enumerate(seeds):
+            t_start = time.time()
+            print(f"  >>> [MALIBO Seed {s} ({idx+1}/{len(seeds)})] 正在执行 300 步优化...")
+            res_s = run_malibo_single_seed(
+                seed=s,
+                reynolds=reynolds,
+                alpha=alpha,
+                max_evals=max_evals,
+                checkpoint_path=checkpoint_path,
+                device=device,
+            )
+            malibo_results.append(res_s)
+            print(f"      --> 完成! 耗时: {res_s['elapsed_seconds']:.1f}s | 最终升阻比: {res_s['best_score']:.2f}")
+
+            # 中途持久化防掉电
+            partial_payload = {
+                "condition": {"airfoil": "NACA0012", "reynolds": reynolds, "alpha": alpha, "max_evals": max_evals, "seeds": seeds},
+                "results": {
+                    "Vanilla-TuRBO": vanilla_turbo_data,
+                    "RL-Meta-TuRBO": rl_meta_turbo_data,
+                    "MALIBO": malibo_results,
+                }
             }
-        }
-        with open(output_json_path, "w", encoding="utf-8") as f:
-            json.dump(partial_payload, f, indent=2, ensure_ascii=False)
+            if "LLM-Meta-TuRBO" in prev_saved_results:
+                partial_payload["results"]["LLM-Meta-TuRBO"] = prev_saved_results["LLM-Meta-TuRBO"]
+            with open(output_json_path, "w", encoding="utf-8") as f:
+                json.dump(partial_payload, f, indent=2, ensure_ascii=False)
 
     m_scores = [r["best_score"] for r in malibo_results]
     print(f"  [MALIBO 完成] 均值={np.mean(m_scores):.2f} ± {np.std(m_scores):.2f}, 最大={np.max(m_scores):.2f}")
 
     # 3. 运行 LLM-Meta-TuRBO
-    print(f"\n[3/4] 启动 LLM-Meta-TuRBO 测试 (10 个随机种子, SGLang @ {llm_url})...")
-    llm_agent = OptimizedLLMMetaAgent(base_url=llm_url, model=llm_model)
-    llm_meta_results = []
-    for idx, s in enumerate(seeds):
-        print(f"  >>> [LLM-Meta-TuRBO Seed {s} ({idx+1}/{len(seeds)})] 正在执行 300 步优化...")
-        res_s = run_llm_meta_single_seed(
-            seed=s,
-            llm_agent=llm_agent,
-            reynolds=reynolds,
-            alpha=alpha,
-            max_evals=max_evals,
-        )
-        llm_meta_results.append(res_s)
-        print(
-            f"      --> 完成! 耗时: {res_s['elapsed_seconds']:.1f}s | "
-            f"干预次数: {len(res_s['interventions'])} | 最终升阻比: {res_s['best_score']:.2f}"
-        )
+    if skip_llm and "LLM-Meta-TuRBO" in prev_saved_results:
+        print(f"\n[3/4] 跳过 LLM-Meta-TuRBO 重新评测，直接复用已有 10 种子测试数据...")
+        llm_meta_results = prev_saved_results["LLM-Meta-TuRBO"]
+    else:
+        print(f"\n[3/4] 启动 LLM-Meta-TuRBO 测试 (10 个随机种子, SGLang @ {llm_url})...")
+        llm_agent = OptimizedLLMMetaAgent(base_url=llm_url, model=llm_model)
+        llm_meta_results = []
+        for idx, s in enumerate(seeds):
+            print(f"  >>> [LLM-Meta-TuRBO Seed {s} ({idx+1}/{len(seeds)})] 正在执行 300 步优化...")
+            res_s = run_llm_meta_single_seed(
+                seed=s,
+                llm_agent=llm_agent,
+                reynolds=reynolds,
+                alpha=alpha,
+                max_evals=max_evals,
+            )
+            llm_meta_results.append(res_s)
+            print(
+                f"      --> 完成! 耗时: {res_s['elapsed_seconds']:.1f}s | "
+                f"干预次数: {len(res_s['interventions'])} | 最终升阻比: {res_s['best_score']:.2f}"
+            )
 
-        # 中途持久化
-        partial_payload["results"]["LLM-Meta-TuRBO"] = llm_meta_results
-        with open(output_json_path, "w", encoding="utf-8") as f:
-            json.dump(partial_payload, f, indent=2, ensure_ascii=False)
+            # 中途持久化
+            partial_payload["results"]["LLM-Meta-TuRBO"] = llm_meta_results
+            with open(output_json_path, "w", encoding="utf-8") as f:
+                json.dump(partial_payload, f, indent=2, ensure_ascii=False)
 
     l_scores = [r["best_score"] for r in llm_meta_results]
     print(f"  [LLM-Meta-TuRBO 完成] 均值={np.mean(l_scores):.2f} ± {np.std(l_scores):.2f}, 最大={np.max(l_scores):.2f}")
@@ -656,6 +682,8 @@ if __name__ == "__main__":
     parser.add_argument("--reynolds", type=float, default=3.5e6)
     parser.add_argument("--alpha", type=float, default=3.5)
     parser.add_argument("--max_evals", type=int, default=300)
+    parser.add_argument("--skip_llm", action="store_true", help="跳过 LLM 重新运行，复用已有数据")
+    parser.add_argument("--skip_malibo", action="store_true", help="跳过 MALIBO 重新运行，复用已有数据")
     args = parser.parse_args()
 
     run_full_benchmark(
@@ -664,4 +692,6 @@ if __name__ == "__main__":
         reynolds=args.reynolds,
         alpha=args.alpha,
         max_evals=args.max_evals,
+        skip_llm=args.skip_llm,
+        skip_malibo=args.skip_malibo,
     )

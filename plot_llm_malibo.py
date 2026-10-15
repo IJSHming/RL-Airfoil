@@ -170,7 +170,7 @@ def plot_bar_comparison(data: dict, output_dir: str = "figures"):
     ax.set_xticklabels([f"Seed {s}" for s in seeds], fontsize=11, fontweight="bold")
     ax.set_xlabel("Independent Evaluation Seeds", fontsize=12, fontweight="bold", labelpad=8)
     ax.set_ylabel("Optimal Penalized Lift-to-Drag Ratio ($L/D$)", fontsize=12, fontweight="bold")
-    ax.set_ylim(140, 255)
+    ax.set_ylim(130, 270)
     ax.grid(axis="y", linestyle="--", alpha=0.6, zorder=1)
 
     cond = data["condition"]
@@ -232,16 +232,17 @@ def plot_boxplot_comparison(data: dict, output_dir: str = "figures"):
         ax.scatter(i + 1, mean_val, marker="D", color="#ffffff", edgecolor=COLORS[m], s=75, linewidth=2.0, zorder=6)
         ax.text(
             i + 1,
-            mean_val + 2.0,
+            mean_val + 3.5,
             f"Mean: {mean_val:.1f}",
             ha="center",
             va="bottom",
-            fontsize=10,
+            fontsize=10.5,
             fontweight="bold",
             color="#111111",
             zorder=7,
         )
 
+    ax.set_ylim(155, 258)
     ax.set_ylabel("Final Best Penalized Lift-to-Drag Ratio ($L/D$)", fontsize=12, fontweight="bold")
     ax.grid(axis="y", linestyle="--", alpha=0.6, zorder=1)
     cond = data["condition"]
@@ -295,7 +296,7 @@ def plot_convergence_curves(data: dict, output_dir: str = "figures"):
     ax.text(250, 80, "Final Convergence\n(High-Precision)", ha="center", fontsize=10, style="italic", color="#555555")
 
     ax.set_xlim(1, max_evals)
-    ax.set_ylim(60, 240)
+    ax.set_ylim(60, 260)
     ax.set_xlabel("Number of Function Evaluations (NFE)", fontsize=12, fontweight="bold")
     ax.set_ylabel("Best Penalized Lift-to-Drag Ratio ($L/D$)", fontsize=12, fontweight="bold")
     ax.grid(True, linestyle="--", alpha=0.6)
