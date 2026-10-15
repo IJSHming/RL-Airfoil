@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 test_weights/
 .hpc_timer_start.txt
+*.log
