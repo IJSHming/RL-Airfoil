@@ -46,10 +46,10 @@ COLORS = {
 }
 
 LABELS = {
-    "Vanilla-TuRBO": "Vanilla-TuRBO",
+    "Vanilla-TuRBO": "TuRBO",
     "RL-Meta-TuRBO": "RL-Meta-TuRBO",
     "LLM-Meta-TuRBO": "LLM-Meta-TuRBO",
-    "MALIBO": "MALIBO (Meta-BO)",
+    "MALIBO": "MALIBO",
 }
 
 
@@ -77,7 +77,9 @@ def plot_airfoil_shapes(data: dict, output_dir: str = "figures"):
     naca_theta = get_naca0012_theta()
     naca_coords = theta_to_coordinates(naca_theta)
 
-    ax.plot(
+    import matplotlib.patches as mpatches
+
+    line_baseline = ax.plot(
         naca_coords["x_closed"],
         naca_coords["y_closed"],
         color=COLOR_BASELINE,
@@ -85,10 +87,10 @@ def plot_airfoil_shapes(data: dict, output_dir: str = "figures"):
         linewidth=1.8,
         label="Baseline NACA 0012 (L/D: 65.8)",
         zorder=2,
-    )
+    )[0]
     ax.fill(naca_coords["x_closed"], naca_coords["y_closed"], color=COLOR_BASELINE, alpha=0.06)
 
-    # 寻找每种方法的中位数结果
+    method_lines = {}
     for method in methods:
         data_list = results[method]
         scores = [r["best_score"] for r in data_list]
@@ -98,14 +100,14 @@ def plot_airfoil_shapes(data: dict, output_dir: str = "figures"):
         coords = rep_run["coordinates"]
         x_c = np.array(coords["x_closed"])
         y_c = np.array(coords["y_closed"])
-        det = rep_run["detailed"]
 
         color = COLORS[method]
-        label = f"{LABELS[method]} (L/D: {rep_run['best_score']:.1f}, $t_{{max}}$: {det['t_max']*100:.1f}%)"
+        label = f"{LABELS[method]} (L/D: {rep_run['best_score']:.1f})"
 
         line_style = "-"
         lw = 2.2 if method == "MALIBO" else (2.0 if method == "LLM-Meta-TuRBO" else 1.8)
-        ax.plot(x_c, y_c, color=color, linestyle=line_style, linewidth=lw, label=label, zorder=4)
+        line = ax.plot(x_c, y_c, color=color, linestyle=line_style, linewidth=lw, label=label, zorder=4)[0]
+        method_lines[method] = line
 
     ax.set_aspect("equal", adjustable="box")
     ax.set_xlim(-0.02, 1.04)
@@ -120,7 +122,21 @@ def plot_airfoil_shapes(data: dict, output_dir: str = "figures"):
         fontweight="bold",
         pad=10,
     )
-    ax.legend(loc="upper right", fontsize=10.5, framealpha=0.92)
+
+    # 布局 2 列图例 (Matplotlib 按列优先填充)：
+    # 第 1 列 (0, 1, 2): Baseline, TuRBO, 空白占位
+    # 第 2 列 (3, 4, 5): RL-Meta-TuRBO, LLM-Meta-TuRBO, MALIBO
+    empty_proxy = mpatches.Patch(color="none", label="")
+    legend_handles = [
+        line_baseline,
+        method_lines["Vanilla-TuRBO"],
+        empty_proxy,
+        method_lines["RL-Meta-TuRBO"],
+        method_lines["LLM-Meta-TuRBO"],
+        method_lines["MALIBO"],
+    ]
+    legend_labels = [h.get_label() for h in legend_handles]
+    ax.legend(legend_handles, legend_labels, loc="upper right", ncol=2, fontsize=10.5, framealpha=0.45)
 
     plt.tight_layout()
     png_path = os.path.join(output_dir, "llm_malibo_airfoil_shapes.png")
@@ -309,7 +325,7 @@ def plot_convergence_curves(data: dict, output_dir: str = "figures"):
         fontweight="bold",
         pad=10,
     )
-    ax.legend(loc="lower right", fontsize=10.5, framealpha=0.92)
+    ax.legend(loc="upper left", fontsize=10.5, framealpha=0.88)
 
     plt.tight_layout()
     png_path = os.path.join(output_dir, "llm_malibo_convergence_curves.png")
