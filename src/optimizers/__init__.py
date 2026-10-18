@@ -2,10 +2,10 @@ from src.optimizers.base import BaseAirfoilOptimizer
 from src.optimizers.spsa import SPSAOptimizer
 from src.optimizers.bobyqa import PyBobyqaOptimizer
 from src.optimizers.de import DEOptimizer
-from src.optimizers.ga import GAOptimizer
 from src.optimizers.pso import PSOOptimizer
 from src.optimizers.cma_es import CMAESOptimizer
 from src.optimizers.turbo import TuRBOOptimizer
+from src.optimizers.llm_turbo import LLMMetaTuRBOOptimizer
 
 OPTIMIZER_CONFIGS = {
     "SPSA": {
@@ -46,17 +46,14 @@ OPTIMIZER_CONFIGS = {
     },
 }
 
-# 向前兼容 GA 别名
-OPTIMIZER_CONFIGS["GA"] = OPTIMIZER_CONFIGS["DE"]
-
 __all__ = [
     "BaseAirfoilOptimizer",
     "SPSAOptimizer",
     "PyBobyqaOptimizer",
     "DEOptimizer",
-    "GAOptimizer",
     "PSOOptimizer",
     "CMAESOptimizer",
     "TuRBOOptimizer",
+    "LLMMetaTuRBOOptimizer",
     "OPTIMIZER_CONFIGS",
 ]

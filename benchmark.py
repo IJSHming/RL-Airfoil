@@ -110,10 +110,6 @@ def run_benchmark(
 
             # 加载 Meta-PPO 权重
             weight_path = os.path.join(weights_dir, f"meta_ppo_{opt_name.lower().replace('-', '_')}.pt")
-            if not os.path.exists(weight_path) and opt_name == "DE":
-                alt = os.path.join(weights_dir, "meta_ppo_ga.pt")
-                if os.path.exists(alt):
-                    weight_path = alt
 
             meta_agent = PPOAgent(
                 state_dim=cfg["state_dim"],
@@ -297,13 +293,7 @@ def main():
     )
     args = parser.parse_args()
 
-    raw_opts = [o.strip() for o in args.optimizers.split(",") if o.strip()]
-    opts = []
-    for o in raw_opts:
-        if o == "GA":
-            opts.append("DE")
-        else:
-            opts.append(o)
+    opts = [o.strip() for o in args.optimizers.split(",") if o.strip()]
 
     run_benchmark(
         weights_dir=args.weights_dir,

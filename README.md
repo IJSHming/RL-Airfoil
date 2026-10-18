@@ -57,40 +57,51 @@ RL-Airfoil/
 │   ├── evaluator.py          # 工业级气动与几何约束评估器 (NeuralFoil + AeroSandbox + 严格可行门禁)
 │   ├── airfoil_utils.py      # NACA0012 初始参数、18维 Kulfan 边界与闭合坐标生成
 │   ├── ppo.py                # PyTorch PPO Actor-Critic 双头网络、GAE 与数值防溢出模块
-│   └── optimizers/           # 6 大黑盒优化器实现 (支持 Vanilla 与 RL-Meta 模式)
+│   ├── llm_agent.py          # 大语言模型元优化控制器 (Qwen3.8-27B 高效 prompt 与宏观气动策略引导)
+│   └── optimizers/           # 黑盒与贝叶斯优化器实现 (支持 Vanilla、RL-Meta 与 LLM-Meta 模式)
 │       ├── base.py           # 优化器基类 (严格可行解检查、300 NFE 计数、状态提取)
-│       ├── spsa.py           # SPSA 优化器 (Spall跨度比例扰动 + 停滞回溯重构)
+│       ├── spsa.py           # SPSA 优化器 (Spall 跨度比例扰动 + 停滞回溯重构)
 │       ├── bobyqa.py         # Py-BOBYQA 优化器 (官方默认信赖域 + 动态信赖域钩子)
 │       ├── de.py             # 差分进化算法 (边界自适应散布 + current-to-best/1/bin)
 │       ├── pso.py            # 粒子群算法 (Clerc-Kennedy 压缩因子特征值守卫)
 │       ├── cma_es.py         # CMA-ES 优化器 (官方 cma 库 + 步长下限保护)
-│       └── turbo.py          # TuRBO 信赖域贝叶斯优化 (GP + Cholesky 汤普森采样)
+│       ├── turbo.py          # TuRBO 信赖域贝叶斯优化 (GP + Cholesky 汤普森采样)
+│       └── llm_turbo.py      # LLM-Meta-TuRBO 优化器 (结合大模型前中期宏观形变引导与信赖域自适应)
 ├── train.py                  # PPO 元优化器高效训练脚本 (10核 CPU 并发采样 + GPU 集中梯度更新)
+├── tune_vanilla.py           # 10核 CPU 并行 Vanilla 优化器超参数标定脚本
 ├── benchmark.py              # 10 随机种子独立对比实验脚本 (记录 300 步完整历史与最终形状)
-├── benchmark_llm_malibo.py   # LLM-Meta-TuRBO 与 MALIBO 10 种子对齐评测脚本
+├── benchmark_llm_malibo.py   # LLM-Meta-TuRBO 与 MALIBO 10 种子对齐评测脚本 (模块化调度)
 ├── launch_sglang.sh          # SGLang 大模型推理引擎启动守护脚本 (Qwen3.8-27B-FP8)
-├── plot_results.py           # 出版级绘图脚本 (输出 6 张单优化器柱状图、收敛曲线、箱线图与全景大图)
-├── plot_llm_malibo.py        # 出版级绘图脚本 (输出四大算法形状、柱状图、箱线图、收敛曲线)
+├── plot_results.py           # RL-Meta 出版级绘图脚本 (输出 6 张单优化器柱状图、收敛曲线、箱线图与全景大图)
+├── plot_llm_malibo.py        # LLM-Meta & MALIBO 出版级绘图脚本 (输出四大算法形状、柱状图、箱线图、收敛曲线)
 ├── weights/                  # 训练保存的 6 个 Meta-PPO 策略权重 (.pt)
+│   ├── meta_ppo_spsa.pt
+│   ├── meta_ppo_py_bobyqa.pt
+│   ├── meta_ppo_de.pt
+│   ├── meta_ppo_pso.pt
+│   ├── meta_ppo_cma_es.pt
+│   └── meta_ppo_turbo.pt
 ├── results/                  # 10 随机种子完整评估轨迹与最终几何数据 (JSON & NPZ)
 │   ├── benchmark_results.json / .npz           # RL-Meta 阶段 6 优化器基准数据
 │   └── llm_malibo_benchmark_results.json / .npz # LLM-Meta 与 MALIBO 对齐基准数据
 ├── figures/                  # 高清科研对比图表 (300 DPI PNG 与 PDF 矢量图)
-│   ├── bar_comparison_spsa.png / .pdf          # SPSA 10 种子具体对比柱状图
-│   ├── bar_comparison_py_bobyqa.png / .pdf     # Py-BOBYQA 10 种子具体对比柱状图
-│   ├── bar_comparison_de.png / .pdf            # DE 10 种子具体对比柱状图
-│   ├── bar_comparison_pso.png / .pdf           # PSO 10 种子具体对比柱状图
-│   ├── bar_comparison_cma_es.png / .pdf        # CMA-ES 10 种子具体对比柱状图
-│   ├── bar_comparison_turbo.png / .pdf         # TuRBO 10 种子具体对比柱状图
-│   ├── bar_comparison.png / .pdf               # 2x3 六合一柱状图全景对比
-│   ├── convergence_curves.png / .pdf           # 10 种子平均收敛曲线与置信带
-│   ├── boxplot_comparison.png / .pdf           # 10 种子最终升阻比分布箱线图与真实数据散点
-│   ├── airfoil_shapes.png / .pdf               # 10 种子取中位数（第5名）的最优翼型几何形状对照
-│   ├── comprehensive_overview.png / .pdf       # 2x2 全景大图汇总
-│   ├── llm_malibo_airfoil_shapes.png / .pdf    # 四大优化方法最优翼型几何外形对照
-│   ├── llm_malibo_bar_comparison.png / .pdf    # 四大优化方法 10 种子柱状图对比
-│   ├── llm_malibo_boxplot_comparison.png / .pdf# 四大优化方法统计分布箱线图
-│   └── llm_malibo_convergence_curves.png / .pdf# 四大优化方法全程收敛曲线对比
+│   ├── rl_meta/              # RL-Meta 阶段 6 大优化器对比图表
+│   │   ├── bar_comparison_spsa.png / .pdf      # SPSA 10 种子柱状对比图
+│   │   ├── bar_comparison_py_bobyqa.png / .pdf # Py-BOBYQA 10 种子柱状对比图
+│   │   ├── bar_comparison_de.png / .pdf        # DE 10 种子柱状对比图
+│   │   ├── bar_comparison_pso.png / .pdf       # PSO 10 种子柱状对比图
+│   │   ├── bar_comparison_cma_es.png / .pdf    # CMA-ES 10 种子柱状对比图
+│   │   ├── bar_comparison_turbo.png / .pdf     # TuRBO 10 种子柱状对比图
+│   │   ├── bar_comparison.png / .pdf           # 2x3 六合一柱状图全景对比
+│   │   ├── convergence_curves.png / .pdf       # 10 种子平均收敛曲线与置信带
+│   │   ├── boxplot_comparison.png / .pdf       # 10 种子最终升阻比分布箱线图与真实数据散点
+│   │   ├── airfoil_shapes.png / .pdf           # 10 种子取中位数（第5名）的最优翼型几何形状对照
+│   │   └── comprehensive_overview.png / .pdf   # 2x2 全景大图汇总
+│   └── llm_malibo/           # LLM-Meta 与 MALIBO 前沿优化对比图表
+│       ├── llm_malibo_airfoil_shapes.png / .pdf    # 四大优化方法最优翼型几何外形对照
+│       ├── llm_malibo_bar_comparison.png / .pdf    # 四大优化方法 10 种子柱状图对比
+│       ├── llm_malibo_boxplot_comparison.png / .pdf# 四大优化方法统计分布箱线图
+│       └── llm_malibo_convergence_curves.png / .pdf# 四大优化方法全程收敛曲线对比
 └── README.md
 ```
 
@@ -113,7 +124,7 @@ python train.py --num_workers 10 --device cuda
 python benchmark.py --num_workers 10
 ```
 
-### 4. 生成全套出版级高清图表
+### 4. 生成 RL-Meta 全套出版级高清图表 (保存至 figures/rl_meta/)
 ```bash
 python plot_results.py
 ```
@@ -146,7 +157,7 @@ python plot_results.py
 3. **几何拓扑与物理安全性**：四大方法均保持 **100%** 的结构几何与气动计算可行率。各方法发展出平滑前缘钝度与渐进式后缘单调厚度分布，有效抑制了跨音速弱激波分离。
 
 ### 5.3 产出图表与结果文件
-- **图表文件 (`figures/`)**：
+- **图表文件 (`figures/llm_malibo/`)**：
   - `llm_malibo_airfoil_shapes.png / .pdf`：四大优化方法最优翼型几何外形对照（图例两列排版，高透明度无遮挡）
   - `llm_malibo_bar_comparison.png / .pdf`：10 次独立随机种子分项性能柱状图对比
   - `llm_malibo_boxplot_comparison.png / .pdf`：性能统计分布箱线图与真实数据散点抖动

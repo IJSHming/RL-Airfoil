@@ -8,7 +8,6 @@
 import argparse
 import concurrent.futures
 import os
-import shutil
 import sys
 import time
 from typing import Any, Dict, List, Tuple
@@ -165,12 +164,6 @@ def train_single_optimizer(
     agent.save(weight_file)
     print(f">>> {opt_name} Meta-Policy 训练完成，权重保存至: {weight_file}")
 
-    # 若为 DE，同步保存一份 meta_ppo_ga.pt 保持兼容
-    if opt_name == "DE":
-        ga_weight_file = os.path.join(output_dir, "meta_ppo_ga.pt")
-        shutil.copyfile(weight_file, ga_weight_file)
-        print(f">>> 同时输出别名兼容权重: {ga_weight_file}")
-
     return agent
 
 
@@ -203,13 +196,7 @@ def main():
     parser.add_argument("--output_dir", type=str, default="weights", help="Directory to save model weights")
     args = parser.parse_args()
 
-    raw_opts = [opt.strip() for opt in args.optimizers.split(",") if opt.strip()]
-    target_optimizers = []
-    for opt in raw_opts:
-        if opt == "GA":
-            target_optimizers.append("DE")
-        else:
-            target_optimizers.append(opt)
+    target_optimizers = [opt.strip() for opt in args.optimizers.split(",") if opt.strip()]
 
     print(f"RL-Meta-Airfoil Multi-Core Parallel PPO Training Initialized")
     print(f"Device: {args.device} | Parallel Workers: {args.num_workers} | Episodes: {args.episodes}")

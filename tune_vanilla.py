@@ -13,7 +13,7 @@ import numpy as np
 from src.evaluator import AerodynamicEvaluator
 from src.optimizers.spsa import SPSAOptimizer
 from src.optimizers.bobyqa import PyBobyqaOptimizer
-from src.optimizers.ga import GAOptimizer  # DE/GA
+from src.optimizers.de import DEOptimizer
 from src.optimizers.pso import PSOOptimizer
 from src.optimizers.cma_es import CMAESOptimizer
 from src.optimizers.turbo import TuRBOOptimizer
@@ -31,7 +31,7 @@ def eval_single_run(args: Tuple[str, Dict[str, Any], int]) -> Dict[str, Any]:
     cls_map = {
         "SPSA": SPSAOptimizer,
         "Py-BOBYQA": PyBobyqaOptimizer,
-        "DE": GAOptimizer,
+        "DE": DEOptimizer,
         "PSO": PSOOptimizer,
         "CMA-ES": CMAESOptimizer,
         "TuRBO": TuRBOOptimizer,

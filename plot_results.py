@@ -33,8 +33,7 @@ plt.rcParams.update({
 })
 
 def get_optimizer_order(results: dict) -> List[str]:
-    de_key = "DE" if "DE" in results else "GA"
-    return ["SPSA", "Py-BOBYQA", de_key, "PSO", "CMA-ES", "TuRBO"]
+    return ["SPSA", "Py-BOBYQA", "DE", "PSO", "CMA-ES", "TuRBO"]
 
 
 COLOR_VANILLA = "#2563EB"   # 科技蓝
@@ -499,7 +498,7 @@ def plot_comprehensive_overview(data: dict, output_dir: str):
 def main():
     parser = argparse.ArgumentParser(description="RL-Meta-Airfoil Visualizer")
     parser.add_argument("--data_file", type=str, default="results/benchmark_results.json", help="Path to benchmark results JSON")
-    parser.add_argument("--output_dir", type=str, default="figures", help="Output directory for generated figures")
+    parser.add_argument("--output_dir", type=str, default="figures/rl_meta", help="Output directory for generated figures")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)

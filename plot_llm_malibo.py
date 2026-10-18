@@ -339,7 +339,7 @@ def plot_convergence_curves(data: dict, output_dir: str = "figures"):
 def main():
     parser = argparse.ArgumentParser(description="生成四大方法对比的 4 张出版级高清图表")
     parser.add_argument("--data", type=str, default="results/llm_malibo_benchmark_results.json")
-    parser.add_argument("--output_dir", type=str, default="figures")
+    parser.add_argument("--output_dir", type=str, default="figures/llm_malibo")
     args = parser.parse_args()
 
     data = load_benchmark_data(args.data)
