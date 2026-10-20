@@ -24,8 +24,8 @@ from src.evaluator import AerodynamicEvaluator
 from src.llm_agent import OptimizedLLMMetaAgent
 from src.optimizers.llm_turbo import LLMMetaTuRBOOptimizer
 
-# 引入 references/Meta-CFD 组件
-_META_CFD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "references", "Meta-CFD")
+# 引入 Meta-CFD 组件
+_META_CFD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Meta-CFD")
 if _META_CFD_DIR not in sys.path:
     sys.path.insert(0, _META_CFD_DIR)
 
@@ -46,7 +46,7 @@ def run_malibo_single_seed(
     reynolds: float = 3.5e6,
     alpha: float = 3.5,
     max_evals: int = 300,
-    checkpoint_path: str = "references/Meta-CFD/malibo/malibo_checkpoint.pt",
+    checkpoint_path: str = "Meta-CFD/malibo/malibo_checkpoint.pt",
     device: Optional[torch.device] = None,
 ) -> Dict[str, Any]:
     """对单个随机种子执行 MALIBO 元优化"""
@@ -182,7 +182,7 @@ def run_full_benchmark(
     base_benchmark_path: str = "results/benchmark_results.json",
     output_json_path: str = "results/llm_malibo_benchmark_results.json",
     output_npz_path: str = "results/llm_malibo_benchmark_results.npz",
-    checkpoint_path: str = "references/Meta-CFD/malibo/malibo_checkpoint.pt",
+    checkpoint_path: str = "Meta-CFD/malibo/malibo_checkpoint.pt",
     llm_url: str = "http://127.0.0.1:30000/v1",
     llm_model: str = "Qwen/Qwen3.8-27B-FP8",
     reynolds: float = 3.5e6,
