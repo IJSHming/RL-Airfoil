@@ -112,59 +112,53 @@ Concisely decide meta-parameters and directional strategy. Output final JSON:"""
         return prompt
 
     def decide_action(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """向 LLM 请求下一阶段超参策略及宏观几何形变方向"""
+        """向 LLM 请求下一阶段超参策略及宏观几何形变方向。
+        严格禁止静默降级走人工预置字典，必须基于真实模型推理。
+        """
         user_prompt = self.build_user_prompt(state)
 
-        step = state.get("step", 16)
-        is_early = (step <= 35 and state.get("best_cl", 0.39) < 0.48)
-        default_action = {
-            "thought": "Fallback to default TuRBO dynamics.",
-            "length_scale_factor": 1.4 if is_early else 1.0,
-            "prob_perturb": 0.6 if is_early else 0.5,
-            "exploration_weight": 1.4 if is_early else 1.0,
-            "directional_strategy": {
-                "upper_camber_shift": 0.09 if is_early else 0.01,
-                "lower_camber_shift": 0.07 if is_early else 0.01,
-                "thickness_shift": 0.01,
-                "le_radius_shift": 0.01,
-            },
-        }
+        if not HAS_OPENAI or self.client is None:
+            raise RuntimeError(
+                "[Research Integrity Violation] openai client is not initialized or not installed! "
+                "Silent degradation to hand-crafted heuristic dictionary is strictly forbidden."
+            )
 
         try:
-            if self.client is not None:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": LLM_SYSTEM_PROMPT},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    temperature=0.7,
-                    top_p=0.90,
-                    max_tokens=2048,
-                )
-                raw_text = response.choices[0].message.content or ""
-                clean = re.sub(r"```json\s*", "", raw_text)
-                clean = re.sub(r"```\s*", "", clean).strip()
-                match = re.search(r"\{.*\}", clean, re.DOTALL)
-                if match:
-                    data = json.loads(match.group(0))
-                    scale_L = float(np.clip(data.get("length_scale_factor", 1.0), 0.8, 1.8))
-                    prob_p = float(np.clip(data.get("prob_perturb", 0.5), 0.2, 0.8))
-                    exp_w = float(np.clip(data.get("exploration_weight", 1.0), 0.8, 1.8))
-                    strat = data.get("directional_strategy", {})
-                    return {
-                        "thought": str(data.get("thought", "")),
-                        "length_scale_factor": scale_L,
-                        "prob_perturb": prob_p,
-                        "exploration_weight": exp_w,
-                        "directional_strategy": {
-                            "upper_camber_shift": float(np.clip(strat.get("upper_camber_shift", 0.0), -0.05, 0.15)),
-                            "lower_camber_shift": float(np.clip(strat.get("lower_camber_shift", 0.0), -0.05, 0.15)),
-                            "thickness_shift": float(np.clip(strat.get("thickness_shift", 0.0), -0.04, 0.05)),
-                            "le_radius_shift": float(np.clip(strat.get("le_radius_shift", 0.0), -0.03, 0.03)),
-                        },
-                    }
-            return default_action
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": LLM_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.7,
+                top_p=0.90,
+                max_tokens=3072,
+            )
+            raw_text = response.choices[0].message.content or ""
+            clean = re.sub(r"```json\s*", "", raw_text)
+            clean = re.sub(r"```\s*", "", clean).strip()
+            match = re.search(r"\{.*\}", clean, re.DOTALL)
+            if match:
+                data = json.loads(match.group(0))
+                scale_L = float(np.clip(data.get("length_scale_factor", 1.0), 0.8, 1.8))
+                prob_p = float(np.clip(data.get("prob_perturb", 0.5), 0.2, 0.8))
+                exp_w = float(np.clip(data.get("exploration_weight", 1.0), 0.8, 1.8))
+                strat = data.get("directional_strategy", {})
+                return {
+                    "thought": str(data.get("thought", "")),
+                    "length_scale_factor": scale_L,
+                    "prob_perturb": prob_p,
+                    "exploration_weight": exp_w,
+                    "directional_strategy": {
+                        "upper_camber_shift": float(np.clip(strat.get("upper_camber_shift", 0.0), -0.05, 0.15)),
+                        "lower_camber_shift": float(np.clip(strat.get("lower_camber_shift", 0.0), -0.05, 0.15)),
+                        "thickness_shift": float(np.clip(strat.get("thickness_shift", 0.0), -0.04, 0.05)),
+                        "le_radius_shift": float(np.clip(strat.get("le_radius_shift", 0.0), -0.03, 0.03)),
+                    },
+                }
+            raise ValueError(f"Failed to parse valid JSON from LLM response:\n{raw_text}")
         except Exception as e:
-            print(f"        [LLM Warning] Request encountered '{type(e).__name__}: {e}'. Falling back to safe default.")
-            return default_action
+            raise RuntimeError(
+                f"[LLM Fatal Error] Real LLM request to {self.base_url} failed with {type(e).__name__}: {e}. "
+                "Silent degradation to hand-crafted heuristic dictionary is strictly forbidden."
+            ) from e
