@@ -55,6 +55,8 @@ def run_malibo_single_seed(
     if checkpoint_path is None:
         checkpoint_path = os.path.join(_META_CFD_DIR, "malibo", "malibo_checkpoint.pt")
     if device is None:
+        if checkpoint_path is None:
+            checkpoint_path = os.path.join(_META_CFD_DIR, "malibo", "malibo_checkpoint.pt")
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # 严格对齐评估器与工业边界防线 (杜绝跨仓库评估器不一致漏洞)
@@ -190,7 +192,7 @@ def run_full_benchmark(
     base_benchmark_path: str = "results/benchmark_results.json",
     output_json_path: str = "results/llm_malibo_benchmark_results.json",
     output_npz_path: str = "results/llm_malibo_benchmark_results.npz",
-    checkpoint_path: str = "Meta-CFD/malibo/malibo_checkpoint.pt",
+    checkpoint_path: Optional[str] = None,
     llm_url: str = "http://127.0.0.1:30000/v1",
     llm_model: str = "Qwen/Qwen3.8-27B-FP8",
     reynolds: float = 3.5e6,
@@ -237,6 +239,8 @@ def run_full_benchmark(
         malibo_results = prev_saved_results["MALIBO"]
     else:
         print(f"\n[2/4] 启动 MALIBO 元学习贝叶斯优化测试 (10 个随机种子)...")
+        if checkpoint_path is None:
+            checkpoint_path = os.path.join(_META_CFD_DIR, "malibo", "malibo_checkpoint.pt")
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         malibo_results = []
         for idx, s in enumerate(seeds):
