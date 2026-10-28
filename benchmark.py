@@ -29,11 +29,12 @@ TARGET_OPTIMIZERS = ["SPSA", "Py-BOBYQA", "DE", "PSO", "CMA-ES", "TuRBO"]
 def eval_seed_task(task_args: Tuple[str, int, float, float, int, Dict[str, np.ndarray]]) -> Dict[str, Any]:
     """单核独立测试进程：针对单个随机种子，评测 Vanilla 与 RL-Meta 表现"""
     opt_name, seed, reynolds, alpha, max_evals, numpy_weights = task_args
-    evaluator = AerodynamicEvaluator(reynolds=reynolds, alpha=alpha)
+    evaluator = AerodynamicEvaluator(reynolds=reynolds, alpha=alpha, max_evals=max_evals)
     cfg = OPTIMIZER_CONFIGS[opt_name]
     OptClass = cfg["class"]
 
     # 1. 运行 Vanilla 基准
+    evaluator.reset_counter()
     v_opt = OptClass(
         evaluator=evaluator,
         max_evals=max_evals,
@@ -45,6 +46,7 @@ def eval_seed_task(task_args: Tuple[str, int, float, float, int, Dict[str, np.nd
     v_coords = theta_to_coordinates(v_res["best_x"])
 
     # 2. 运行 RL-Meta
+    evaluator.reset_counter()
     def meta_fn(s: np.ndarray) -> np.ndarray:
         return numpy_policy_forward(s, numpy_weights, deterministic=True)
 

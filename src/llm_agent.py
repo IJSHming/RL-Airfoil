@@ -66,6 +66,7 @@ class OptimizedLLMMetaAgent:
         self.model = model
         self.api_key = api_key
         self.timeout = timeout
+        self.interaction_log: List[Dict[str, Any]] = []
 
         if HAS_OPENAI:
             self.client = OpenAI(
@@ -144,7 +145,7 @@ Concisely decide meta-parameters and directional strategy. Output final JSON:"""
                 prob_p = float(np.clip(data.get("prob_perturb", 0.5), 0.2, 0.8))
                 exp_w = float(np.clip(data.get("exploration_weight", 1.0), 0.8, 1.8))
                 strat = data.get("directional_strategy", {})
-                return {
+                action = {
                     "thought": str(data.get("thought", "")),
                     "length_scale_factor": scale_L,
                     "prob_perturb": prob_p,
@@ -156,6 +157,13 @@ Concisely decide meta-parameters and directional strategy. Output final JSON:"""
                         "le_radius_shift": float(np.clip(strat.get("le_radius_shift", 0.0), -0.03, 0.03)),
                     },
                 }
+                self.interaction_log.append({
+                    "step": state.get("step"),
+                    "user_prompt": user_prompt,
+                    "raw_response": raw_text,
+                    "action": action,
+                })
+                return action
             raise ValueError(f"Failed to parse valid JSON from LLM response:\n{raw_text}")
         except Exception as e:
             raise RuntimeError(

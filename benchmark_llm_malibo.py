@@ -24,8 +24,10 @@ from src.evaluator import AerodynamicEvaluator
 from src.llm_agent import OptimizedLLMMetaAgent
 from src.optimizers.llm_turbo import LLMMetaTuRBOOptimizer
 
-# 引入 Meta-CFD 组件
-_META_CFD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Meta-CFD")
+# 引入 Meta-CFD 组件 (处理平级目录路径)
+_META_CFD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Meta-CFD")
+if not os.path.exists(_META_CFD_DIR):
+    _META_CFD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Meta-CFD")
 if _META_CFD_DIR not in sys.path:
     sys.path.insert(0, _META_CFD_DIR)
 
@@ -46,21 +48,25 @@ def run_malibo_single_seed(
     reynolds: float = 3.5e6,
     alpha: float = 3.5,
     max_evals: int = 300,
-    checkpoint_path: str = "Meta-CFD/malibo/malibo_checkpoint.pt",
+    checkpoint_path: Optional[str] = None,
     device: Optional[torch.device] = None,
 ) -> Dict[str, Any]:
     """对单个随机种子执行 MALIBO 元优化"""
+    if checkpoint_path is None:
+        checkpoint_path = os.path.join(_META_CFD_DIR, "malibo", "malibo_checkpoint.pt")
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    from evaluator import AerodynamicEvaluator as MetaCFDEvaluator
-    evaluator = MetaCFDEvaluator(reynolds=reynolds, alpha=alpha)
-    from malibo_dataset_generator.airfoil_baselines import (
-        get_airfoil_bounds,
-        get_airfoil_parameters,
-    )
-    x0 = get_airfoil_parameters("naca0012")
-    lb, ub = get_airfoil_bounds(x0)
+    # 严格对齐评估器与工业边界防线 (杜绝跨仓库评估器不一致漏洞)
+    evaluator = AerodynamicEvaluator(reynolds=reynolds, alpha=alpha, max_evals=max_evals)
+    x0 = get_naca0012_theta()
+    lb, ub = get_kulfan_bounds(x0)
+
+    if not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(
+            f"MALIBO checkpoint not found at: {checkpoint_path}. "
+            "Please ensure Meta-CFD/malibo/malibo_checkpoint.pt is available."
+        )
 
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     num_tasks = ckpt.get("num_tasks", 550)
@@ -74,6 +80,7 @@ def run_malibo_single_seed(
     opt_cfg = MALIBOConfig()
     opt_cfg.optimization.seed = seed
     opt_cfg.optimization.budget = max_evals
+    opt_cfg.optimization.n_init = 15
     init_x_unit = (x0 - lb) / (ub - lb + 1e-8)
 
     def is_geom_valid(th: np.ndarray) -> bool:
@@ -88,6 +95,7 @@ def run_malibo_single_seed(
         ub=ub,
         init_x=init_x_unit,
         evaluate_init_first=True,
+        n_init=15,
         config=opt_cfg,
         budget=max_evals,
         geometry_validator=is_geom_valid,
@@ -133,7 +141,7 @@ def run_llm_meta_single_seed(
     max_evals: int = 300,
 ) -> Dict[str, Any]:
     """对单个随机种子执行 LLM-Meta-TuRBO 元优化"""
-    evaluator = AerodynamicEvaluator(reynolds=reynolds, alpha=alpha)
+    evaluator = AerodynamicEvaluator(reynolds=reynolds, alpha=alpha, max_evals=max_evals)
     x0 = get_naca0012_theta()
     lb, ub = get_kulfan_bounds(x0)
 
