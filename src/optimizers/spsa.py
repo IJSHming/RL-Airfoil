@@ -60,16 +60,14 @@ class SPSAOptimizer(BaseAirfoilOptimizer):
         return np.concatenate([base, specific])
 
     def apply_action(self, action: np.ndarray, vanilla_a: float, vanilla_c: np.ndarray):
-        """Action (2维) -> 锚定 Spall 理论衰减基准进行大幅动态弹性伸缩，并在停滞时恢复探索"""
-        a1 = float(action[0])
-        a2 = float(action[1]) if len(action) > 1 else 0.0
-        stag_ratio = min(self.stagnation_counter / 10.0, 1.5)
-        # 停滞时自适应提升步长以摆脱局部平坦平台
-        scale_a = float(np.exp(np.clip(a1, -1.0, 1.0) * 0.35 + 0.12 * stag_ratio))
-        scale_c = float(np.exp(np.clip(a2, -1.0, 1.0) * 0.25))
+        """Action (2维) -> 纯净 RL 策略动态调节步长乘子与摄动尺度乘子 (action=0 时精确退化为 Vanilla SPSA)"""
+        a1 = float(np.clip(action[0], -1.0, 1.0))
+        a2 = float(np.clip(action[1], -1.0, 1.0)) if len(action) > 1 else 0.0
+        scale_a = float(np.exp(a1 * 0.70))
+        scale_c = float(np.exp(a2 * 0.50))
 
         self.current_a = float(np.clip(vanilla_a * scale_a, 1e-6, 0.50))
-        self.current_c = np.clip(vanilla_c * scale_c, 1e-4 * self.span, 0.20 * self.span)
+        self.current_c = np.clip(vanilla_c * scale_c, 1e-4 * self.span, 0.25 * self.span)
 
     def run(self) -> Dict[str, Any]:
         self.evaluate_initial()
@@ -91,20 +89,10 @@ class SPSAOptimizer(BaseAirfoilOptimizer):
             vanilla_a = a_base / (1.0 + self.iter_k / 20.0) ** self.alpha_exp
             vanilla_c = c_vec / (1.0 + self.iter_k) ** self.gamma_exp
 
-            if self.is_meta:
-                # 遭遇长程停滞时，自适应回溯至全局历史最优解恢复动量探索
-                if self.stagnation_counter >= 12:
-                    current_x = self.best_x.copy()
-
-                if self.rl_policy is not None:
-                    state = self.get_state()
-                    action = self.rl_policy(state)
-                    self.apply_action(action, vanilla_a, vanilla_c)
-                else:
-                    self.current_a = vanilla_a
-                    self.current_c = vanilla_c
-                    state = self.get_state()
-                    action = None
+            if self.is_meta and self.rl_policy is not None:
+                state = self.get_state()
+                action = self.rl_policy(state)
+                self.apply_action(action, vanilla_a, vanilla_c)
             else:
                 self.current_a = vanilla_a
                 self.current_c = vanilla_c
@@ -137,19 +125,15 @@ class SPSAOptimizer(BaseAirfoilOptimizer):
                 self.upper_bounds,
             )
 
-            # 记录经验 (跨工况自适应归一化稠密奖励与突破里程碑奖励)
+            # 记录经验 (跨工况无标度归一化稠密奖励，零测试集阈值先验泄漏)
             if self.is_meta and action is not None:
                 next_state = self.get_state()
                 done = (self.eval_count >= self.max_evals)
-                prog = self.eval_count / max(self.max_evals, 1)
-                rel_gain = (self.best_score - score_before) / max(self.initial_score, 15.0)
-                reward = rel_gain * (15.0 + 35.0 * prog) - 0.005
-                if self.best_score > 190.0 and score_before <= 190.0:
-                    reward += 1.5
-                if self.best_score > 205.0 and score_before <= 205.0:
-                    reward += 3.0
+                denom = max(abs(self.initial_score), 20.0)
+                rel_gain = (self.best_score - score_before) / denom
+                reward = rel_gain * 15.0
                 if done:
-                    reward += max((self.best_score - self.initial_score) / 30.0, 0.0) * 0.50
+                    reward += max((self.best_score - self.initial_score) / denom, 0.0) * 1.0
                 self.transitions.append({
                     "state": state,
                     "action": action,

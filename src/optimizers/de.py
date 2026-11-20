@@ -55,19 +55,11 @@ class DEOptimizer(BaseAirfoilOptimizer):
         return np.concatenate([base, specific])
 
     def apply_action(self, action: np.ndarray):
-        """Action (3维) -> 动态调节差分进化超参 [CR, F] 在保持种群收敛性前提下自适应突围"""
-        a1 = float(action[0])
-        a2 = float(action[1]) if len(action) > 1 else 0.0
-        prog = self.eval_count / max(self.max_evals, 1)
-        stag_ratio = min(self.stagnation_counter / 8.0, 1.0)
-
-        # 前期宽广搜索 (F较高)，后期收敛精化 (F适度回落)，停滞时动态注能突围
-        base_f = 0.82 * (1.0 - prog) + 0.52 * prog
-        f_target = float(np.clip(base_f + 0.15 * stag_ratio + 0.05 * np.clip(a1, -1.0, 1.0), 0.40, 0.95))
-        cr_target = float(np.clip(0.85 - 0.08 * stag_ratio + 0.05 * np.clip(a2, -1.0, 1.0), 0.75, 0.95))
-
-        self.F = float(0.5 * self.F + 0.5 * f_target)
-        self.CR = float(0.5 * self.CR + 0.5 * cr_target)
+        """Action (2维) -> 纯净 RL 策略动态调节差分进化超参 [F, CR] (action=0 时精确退化为 Vanilla DE)"""
+        a1 = float(np.clip(action[0], -1.0, 1.0))
+        a2 = float(np.clip(action[1], -1.0, 1.0)) if len(action) > 1 else 0.0
+        self.F = float(np.clip(self.base_f * np.exp(a1 * 0.45), 0.25, 1.20))
+        self.CR = float(np.clip(self.base_cr + a2 * 0.18, 0.40, 0.98))
 
     def run(self) -> Dict[str, Any]:
         d = len(self.x0)
@@ -146,19 +138,15 @@ class DEOptimizer(BaseAirfoilOptimizer):
                     population[i] = trial
                     fitnesses[i] = trial_fit
 
-            # 记录 RL 经验 (跨工况自适应归一化稠密奖励与突破里程碑激励)
+            # 记录 RL 经验 (跨工况无标度归一化稠密奖励，零测试集阈值先验泄漏)
             if self.is_meta and action is not None:
                 next_state = self.get_state()
                 done = (self.eval_count >= self.max_evals)
-                prog = self.eval_count / max(self.max_evals, 1)
-                rel_gain = (self.best_score - score_before) / max(self.initial_score, 15.0)
-                reward = rel_gain * (15.0 + 35.0 * prog) - 0.005
-                if self.best_score > 185.0 and score_before <= 185.0:
-                    reward += 1.5  # 突破 185 基准
-                if self.best_score > 200.0 and score_before <= 200.0:
-                    reward += 3.0  # 突破 200 卓越水平
+                denom = max(abs(self.initial_score), 20.0)
+                rel_gain = (self.best_score - score_before) / denom
+                reward = rel_gain * 15.0
                 if done:
-                    reward += max((self.best_score - self.initial_score) / 30.0, 0.0) * 0.50
+                    reward += max((self.best_score - self.initial_score) / denom, 0.0) * 1.0
                 self.transitions.append({
                     "state": state,
                     "action": action,

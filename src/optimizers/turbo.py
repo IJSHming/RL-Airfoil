@@ -65,14 +65,11 @@ class TuRBOOptimizer(BaseAirfoilOptimizer):
         return np.concatenate([base, specific])
 
     def apply_action(self, action: np.ndarray):
-        """Action (2维) -> [信赖域尺度弹性乘子, 汤普森采样探索温度] (停滞自适应温控与尺度调节)"""
-        scale_L = float(np.exp(np.clip(action[0], -1.0, 1.0) * 0.45))
+        """Action (2维) -> 纯净 RL 策略调节 [信赖域尺度弹性乘子, 汤普森采样探索温度] (action=0 时精确退化为 Vanilla TuRBO)"""
+        scale_L = float(np.exp(np.clip(action[0], -1.0, 1.0) * 0.50))
         self.L = float(np.clip(self.base_L * scale_L, self.L_min, self.L_max))
-        temp_scale = float(np.exp(np.clip(action[1], -1.0, 1.0) * 0.40))
-        if self.stagnation_counter > 5:
-            self.temperature = float(np.clip(temp_scale * 1.35, 0.8, 2.2))
-        else:
-            self.temperature = float(np.clip(temp_scale, 0.75, 1.25))
+        temp_scale = float(np.exp(np.clip(action[1], -1.0, 1.0) * 0.50))
+        self.temperature = float(np.clip(temp_scale, 0.50, 2.00))
 
     def run(self) -> Dict[str, Any]:
         d = len(self.x0)
@@ -191,18 +188,15 @@ class TuRBOOptimizer(BaseAirfoilOptimizer):
                     self.base_L = self.L_init  # TuRBO 标准重启机制：信赖域收敛塌缩后重置展开，跳出局部陷阱
                 self.n_failure = 0
 
-            # 记录经验 (跨工况自适应归一化稠密奖励与突破里程碑激励)
+            # 记录经验 (跨工况无标度归一化稠密奖励，零测试集阈值先验泄漏)
             if self.is_meta and action is not None:
                 next_state = self.get_state()
                 done = (self.eval_count >= self.max_evals)
-                rel_gain = (self.best_score - score_before) / max(self.initial_score, 15.0)
-                reward = rel_gain * 30.0 - 0.003
-                if self.best_score > 205.0 and score_before <= 205.0:
-                    reward += 1.0  # 突破 205 门槛奖励
-                if self.best_score > 220.0 and score_before <= 220.0:
-                    reward += 2.0  # 冲刺 220+ 巅峰大奖
+                denom = max(abs(self.initial_score), 20.0)
+                rel_gain = (self.best_score - score_before) / denom
+                reward = rel_gain * 15.0
                 if done:
-                    reward += max((self.best_score - self.initial_score) / 50.0, 0.0) * 0.25
+                    reward += max((self.best_score - self.initial_score) / denom, 0.0) * 1.0
                 self.transitions.append({
                     "state": state,
                     "action": action,

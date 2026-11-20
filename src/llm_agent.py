@@ -1,12 +1,17 @@
 """LLM-Meta-Airfoil 元优化智能体模块：
-基于 OpenAI 官方 SDK 与本地部署的大语言模型 (如 Qwen3.8-27B-FP8)，
-结合气动学专家先验与宏观定向引导策略，为 TuRBO 提供自适应元参数与形状扰动控制。
+基于 OpenAI 官方 SDK 与本地部署的大语言模型 (如 Qwen/Qwen3.8-27B-FP8)，
+结合通用空气动力学物理原理与贝叶斯优化信赖域状态，
+为 18 维 Kulfan (CST) TuRBO-1 提供停滞自适应元参数调节与宏观几何方向引导。
+
+严格遵守科研诚信与零静默降级准则：
+1. 严禁在提示词中硬编码最优解数值或指令性偏移区间；
+2. 所有几何偏移通道采用对称边界，由模型根据空气动力学原理与实时反馈自主决策；
+3. 严禁在 LLM 离线或解析失败时静默回退人工启发式字典。
 """
 
 import json
 import re
-import sys
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List
 import numpy as np
 
 try:
@@ -17,32 +22,33 @@ except ImportError:
 
 
 LLM_SYSTEM_PROMPT = """You are a senior aerodynamicist and Bayesian Optimization meta-controller.
-Your goal is to maximize the penalized lift-to-drag ratio (L/D) of an airfoil at Re=3.5e6, alpha=3.5 deg starting from NACA 0012.
+Your goal is to maximize the penalized lift-to-drag ratio (L/D) of a 2D subsonic/transonic airfoil represented by an 18-dimensional Kulfan CST parameterization (8 upper Bernstein weights, 8 lower Bernstein weights, 1 leading-edge weight, 1 trailing-edge thickness) under industrial geometric and structural constraints.
 
-Key Aerodynamic Insights:
-1. Symmetric NACA 0012 has 0 camber, resulting in low lift (CL ~ 0.39) and modest L/D (~65.8).
-2. High-performance transonic/subsonic airfoils require:
-   - Moderate positive upper camber (upper_camber_shift in [0.05, 0.12]): enhances suction peak without premature shock.
-   - Aft reflex and rear loading (lower_camber_shift in [0.04, 0.10]): raises lower surface towards the trailing edge, reducing pressure drag CD.
-   - Thickness control (thickness_shift in [-0.02, 0.03]): keeps t_max within the optimal structural range [11%, 16%].
-   - Leading edge radius (le_radius_shift in [0.0, 0.03]): softens suction collapse at alpha=3.5 deg.
+General Aerodynamic & Geometric Constraints:
+1. Geometric feasibility is strictly enforced: maximum relative thickness t_max in [8%, 20%], maximum thickness location x_tmax in [20%, 55%] chord, structural spar thickness minimums at 25% and 70% chord, non-zero leading-edge radius and trailing-edge angle, monotonic aft thickness taper (no fishtailing), smooth non-wavy upper surface, and pitching moment CM >= -0.25.
+2. Lift-to-drag performance balances circulation (camber and aft loading), pressure-gradient control (suction-peak curvature and leading-edge radius), and profile drag / structural thickness limits.
 
-Strategy per Optimization Phase:
-- Early Phase (steps <= 35, low CL): Be BOLD and AGGRESSIVE. Strongly increase upper camber and lower reflex to break symmetry, expand trust region.
-- Mid Phase (steps 36-100): Airfoil has camber; gently fine-tune thickness distribution and suction peak position.
-- Late Transition (steps 101-150): Micro-tune and slightly contract trust region for smooth local Bayesian convergence.
-- After step 150: The optimization will transition entirely to pure Bayesian local exploitation.
+Decision Mode:
+- Decide Trust-Region Bayesian Optimization (TuRBO-1) hyperparameters adapted to D=18:
+  * length_scale_factor in [0.70, 1.50]: temporary multiplier applied to the current trust-region side length L (>1.0 expands search to escape local plateaus; <1.0 tightens search for local refinement).
+  * prob_perturb in [0.25, 1.00]: per-coordinate perturbation probability (baseline is min(20/18, 1.0) = 1.0).
+  * exploration_weight in [0.70, 1.50]: Thompson sampling posterior standard-deviation multiplier (>1.0 boosts exploration; <1.0 favors exploitation).
+- Optionally provide 'directional_strategy' specifying smooth macro CST shape perturbations along orthogonal physical modes, or set 'directional_strategy' to null when pure local GP sampling is preferable:
+  * camber_shift in [-0.10, 0.10]: symmetric mid-chord camber mode (shifts both upper and lower surfaces equally with a smooth bell envelope).
+  * aft_camber_shift in [-0.08, 0.08]: aft-chord camber / rear-loading mode (shifts both surfaces smoothly over the rear half of the chord).
+  * thickness_shift in [-0.04, 0.04]: symmetric thickness mode (separates or compresses upper and lower surfaces smoothly).
+  * le_radius_shift in [-0.03, 0.03]: leading-edge weight adjustment controlling nose bluntness.
 
-Output ONLY a valid JSON object matching this schema:
+Output ONLY a valid JSON object matching this exact schema:
 {
-  "thought": "1-2 sentence engineering rationale (under 40 words).",
-  "length_scale_factor": float in [0.8, 1.8],
-  "prob_perturb": float in [0.25, 0.75],
-  "exploration_weight": float in [0.8, 1.8],
+  "thought": "1-2 sentence aerodynamic/BO rationale (under 45 words).",
+  "length_scale_factor": float in [0.70, 1.50],
+  "prob_perturb": float in [0.25, 1.00],
+  "exploration_weight": float in [0.70, 1.50],
   "directional_strategy": {
-    "upper_camber_shift": float in [-0.05, 0.15],
-    "lower_camber_shift": float in [-0.05, 0.15],
-    "thickness_shift": float in [-0.03, 0.04],
+    "camber_shift": float in [-0.10, 0.10],
+    "aft_camber_shift": float in [-0.08, 0.08],
+    "thickness_shift": float in [-0.04, 0.04],
     "le_radius_shift": float in [-0.03, 0.03]
   }
 }
@@ -50,7 +56,7 @@ Output ONLY a valid JSON object matching this schema:
 
 
 class OptimizedLLMMetaAgent:
-    """针对 Qwen3.8-27B 宏观气动方向决策优化的元控制器智能体"""
+    """面向 2D 翼型宏观气动决策与信赖域调控的真实 LLM 元控制器智能体."""
 
     def __init__(
         self,
@@ -73,56 +79,58 @@ class OptimizedLLMMetaAgent:
                 base_url=self.base_url,
                 api_key=self.api_key,
                 timeout=self.timeout,
-                max_retries=0,
+                max_retries=1,
             )
         else:
             self.client = None
 
     def build_user_prompt(self, state: Dict[str, Any]) -> str:
-        """根据当前优化阶段动态构建高信息密度 prompt"""
+        """根据当前优化状态与触发原因构建无泄漏客观状态提示词."""
         step = state["step"]
-        best_cl = state.get("best_cl", 0.39)
-        best_ld = state.get("best_ld", 65.8)
+        best_cl = state.get("best_cl", 0.0)
+        best_cd = state.get("best_cd", 0.0)
+        best_cm = state.get("best_cm", 0.0)
+        best_ld = state.get("best_ld", 0.0)
+        best_t_max = state.get("best_t_max", 0.12)
+        stag = state.get("stagnation_count", 0)
+        trigger_reason = state.get("trigger_reason", "stagnation")
 
-        if step <= 35 and best_cl < 0.48:
+        if trigger_reason == "post_init":
             phase_str = (
-                "EARLY EXPLORATION (Aggressive Camber Needed): Baseline NACA 0012 is symmetric. "
-                "You MUST apply bold positive upper camber shift (+0.07 ~ +0.12) and lower reflex (+0.05 ~ +0.10) "
-                "to break symmetry and boost lift."
+                "POST-INIT DIAGNOSTIC (Initial 15 local samples around baseline just finished; no stagnation event yet): "
+                "Assess initial aerodynamic state and decide initial trust-region hyperparameters and optional macro shape direction."
             )
-        elif step <= 100:
+        elif step <= 95:
             phase_str = (
-                f"MID REFINEMENT: Airfoil already developed positive camber (CL={best_cl:.3f}, L/D={best_ld:.1f}). "
-                "Apply gentle micro-adjustments (shifts in [-0.03, +0.03]) to optimize suction peak and reduce drag without over-thickening."
+                f"EARLY/MID STAGNATION INTERVENTION (Stagnation = {stag} steps, Best L/D = {best_ld:.2f}): "
+                "Local GP sampling has stalled. Adapt trust-region exploration hyperparameters and optionally propose a smooth macro shape shift."
             )
         else:
             phase_str = (
-                f"PRE-CONVERGENCE ALIGNMENT: L/D={best_ld:.1f}. Apply very small micro-tuning (shifts in [-0.02, +0.02]) "
-                "and slightly contract trust region (length_scale_factor in [0.8, 1.0]) for smooth Bayesian convergence."
+                f"LATE STAGNATION INTERVENTION (Stagnation = {stag} steps, Best L/D = {best_ld:.2f}): "
+                "Local refinement has stalled. Adapt trust-region parameters and optionally refine shape within geometric constraints."
             )
 
-        prompt = f"""=== Current Optimization State ===
+        prompt = f"""=== Current 2D Airfoil Optimization State ===
 - Phase: {phase_str}
-- Airfoil: NACA0012 base | Re: {state['reynolds']:.2e} | Alpha: {state['alpha']} deg
-- Progress: Step {step} / {state['max_evals']} (Remaining: {state['budget_left']})
-- Initial L/D: {state['init_ld']:.2f} | Current Best L/D: {state['best_ld']:.2f}
-- Aerodynamics: CL = {best_cl:.4f}, CD = {state.get('best_cd', 0.0):.5f}, t_max = {state.get('best_t_max', 0.12)*100:.2f}% (Target: 11%~15%)
-- TuRBO State: TR Length L = {state['tr_length']:.4f}, Stagnation = {state['stagnation_count']}, Successes = {state['success_counter']}/{state['success_tolerance']}
+- Baseline Airfoil: {state.get('airfoil_name', 'NACA0012')} | Re = {state['reynolds']:.2e} | AoA = {state['alpha']} deg
+- Progress: Step {step} / {state['max_evals']} (Remaining Budget: {state['budget_left']})
+- Initial L/D: {state['init_ld']:.2f} | Current Best Feasible L/D: {best_ld:.2f}
+- Current Best Aerodynamics & Geometry: CL = {best_cl:.4f}, CD = {best_cd:.5f}, CM = {best_cm:.4f} (Limit >= -0.25), t_max = {best_t_max*100:.2f}% (Allowed: [8%, 20%])
+- TuRBO Status: Effective TR Length L = {state['tr_length']:.4f}, Stagnation = {stag}, Successes = {state['success_counter']}/{state['success_tolerance']}
 
-Concisely decide meta-parameters and directional strategy. Output final JSON:"""
+Concisely decide meta-parameters and optional directional strategy. Output final JSON:"""
         return prompt
 
     def decide_action(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """向 LLM 请求下一阶段超参策略及宏观几何形变方向。
-        严格禁止静默降级走人工预置字典，必须基于真实模型推理。
-        """
-        user_prompt = self.build_user_prompt(state)
-
+        """向本地部署的真实 LLM 请求下一阶段超参策略与宏观几何方向 (严禁静默降级)."""
         if not HAS_OPENAI or self.client is None:
             raise RuntimeError(
                 "[Research Integrity Violation] openai client is not initialized or not installed! "
                 "Silent degradation to hand-crafted heuristic dictionary is strictly forbidden."
             )
+
+        user_prompt = self.build_user_prompt(state)
 
         try:
             response = self.client.chat.completions.create(
@@ -131,9 +139,10 @@ Concisely decide meta-parameters and directional strategy. Output final JSON:"""
                     {"role": "system", "content": LLM_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
-                temperature=0.7,
+                temperature=0.6,
                 top_p=0.90,
-                max_tokens=3072,
+                max_tokens=1024,
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             )
             raw_text = response.choices[0].message.content or ""
             clean = re.sub(r"```json\s*", "", raw_text)
@@ -141,24 +150,28 @@ Concisely decide meta-parameters and directional strategy. Output final JSON:"""
             match = re.search(r"\{.*\}", clean, re.DOTALL)
             if match:
                 data = json.loads(match.group(0))
-                scale_L = float(np.clip(data.get("length_scale_factor", 1.0), 0.8, 1.8))
-                prob_p = float(np.clip(data.get("prob_perturb", 0.5), 0.2, 0.8))
-                exp_w = float(np.clip(data.get("exploration_weight", 1.0), 0.8, 1.8))
-                strat = data.get("directional_strategy", {})
-                action = {
+                scale_L = float(np.clip(data.get("length_scale_factor", 1.0), 0.70, 1.50))
+                prob_p = float(np.clip(data.get("prob_perturb", 1.0), 0.25, 1.00))
+                exp_w = float(np.clip(data.get("exploration_weight", 1.0), 0.70, 1.50))
+                strat = data.get("directional_strategy")
+
+                action: Dict[str, Any] = {
                     "thought": str(data.get("thought", "")),
                     "length_scale_factor": scale_L,
                     "prob_perturb": prob_p,
                     "exploration_weight": exp_w,
-                    "directional_strategy": {
-                        "upper_camber_shift": float(np.clip(strat.get("upper_camber_shift", 0.0), -0.05, 0.15)),
-                        "lower_camber_shift": float(np.clip(strat.get("lower_camber_shift", 0.0), -0.05, 0.15)),
-                        "thickness_shift": float(np.clip(strat.get("thickness_shift", 0.0), -0.04, 0.05)),
-                        "le_radius_shift": float(np.clip(strat.get("le_radius_shift", 0.0), -0.03, 0.03)),
-                    },
+                    "directional_strategy": None,
                 }
+                if isinstance(strat, dict):
+                    action["directional_strategy"] = {
+                        "camber_shift": float(np.clip(strat.get("camber_shift", 0.0), -0.10, 0.10)),
+                        "aft_camber_shift": float(np.clip(strat.get("aft_camber_shift", 0.0), -0.08, 0.08)),
+                        "thickness_shift": float(np.clip(strat.get("thickness_shift", 0.0), -0.04, 0.04)),
+                        "le_radius_shift": float(np.clip(strat.get("le_radius_shift", 0.0), -0.03, 0.03)),
+                    }
                 self.interaction_log.append({
                     "step": state.get("step"),
+                    "trigger_reason": state.get("trigger_reason", "stagnation"),
                     "user_prompt": user_prompt,
                     "raw_response": raw_text,
                     "action": action,

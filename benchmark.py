@@ -8,9 +8,16 @@
 import argparse
 import concurrent.futures
 import json
+import multiprocessing
 import os
 import sys
 import time
+
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+
 from typing import Any, Dict, List, Tuple
 import numpy as np
 import torch
@@ -105,7 +112,8 @@ def run_benchmark(
         except Exception:
             pass
 
-    with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
+    mp_ctx = multiprocessing.get_context("spawn")
+    with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers, mp_context=mp_ctx) as executor:
         for opt_name in target_optimizers:
             cfg = OPTIMIZER_CONFIGS[opt_name]
             results[opt_name] = {"Vanilla": [], "RL-Meta": []}

@@ -230,8 +230,8 @@ def plot_boxplot_comparison(data: dict, output_dir: str = "figures"):
         score_data,
         patch_artist=True,
         widths=0.45,
+        showfliers=False,
         medianprops=dict(color="#111111", linewidth=2.0),
-        flierprops=dict(marker="o", markersize=6, alpha=0.7),
         zorder=3,
     )
     ax.set_xticks(range(1, len(methods) + 1))
@@ -243,27 +243,29 @@ def plot_boxplot_comparison(data: dict, output_dir: str = "figures"):
         patch.set_edgecolor(COLORS[method])
         patch.set_linewidth(1.8)
 
-    # 叠加数据散点 (Jitter) 与 均值标记 (Diamond)
+    # 叠加数据散点 (固定种子 Jitter) 与 均值标记 (Diamond)，将均值标签置于上须上方彻底杜绝遮挡
+    rng_plot = np.random.RandomState(42)
     for i, (m, scores) in enumerate(zip(methods, score_data)):
-        x_jitter = np.random.normal(i + 1, 0.04, size=len(scores))
+        x_jitter = rng_plot.normal(i + 1, 0.04, size=len(scores))
         ax.scatter(x_jitter, scores, color=COLORS[m], edgecolor="#111111", s=55, alpha=0.85, zorder=5)
-        mean_val = np.mean(scores)
+        mean_val = float(np.mean(scores))
         ax.scatter(i + 1, mean_val, marker="D", color="#ffffff", edgecolor=COLORS[m], s=75, linewidth=2.0, zorder=6)
         ax.text(
             i + 1,
-            mean_val + 3.5,
+            float(np.max(scores)) + 2.8,
             f"Mean: {mean_val:.1f}",
             ha="center",
             va="bottom",
-            fontsize=10.5,
+            fontsize=10.0,
             fontweight="bold",
             color="#111111",
+            bbox=dict(boxstyle="round,pad=0.22", facecolor="#ffffff", edgecolor=COLORS[m], alpha=0.88, linewidth=1.0),
             zorder=7,
         )
 
     all_box_scores = [sc for grp in score_data for sc in grp]
     y_min_b = min(all_box_scores) - 12.0
-    y_max_b = max(all_box_scores) + 18.0
+    y_max_b = max(all_box_scores) + 20.0
     ax.set_ylim(y_min_b, y_max_b)
     ax.set_ylabel("Final Best Penalized Lift-to-Drag Ratio ($L/D$)", fontsize=12, fontweight="bold")
     ax.grid(axis="y", linestyle="--", alpha=0.6, zorder=1)

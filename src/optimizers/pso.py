@@ -53,15 +53,13 @@ class PSOOptimizer(BaseAirfoilOptimizer):
         return np.concatenate([base, specific])
 
     def apply_action(self, action: np.ndarray):
-        """Action (3维) -> 动态调节 PSO [w, c1, c2]，在严格保持 Clerc-Kennedy 收敛边界前提下赋能动态脱困活力"""
-        a1 = float(action[0])
-        a2 = float(action[1])
-        stag_ratio = min(self.stagnation_counter / 15.0, 1.0)
-        w_target = self.base_w + 0.045 * stag_ratio + 0.005 * np.clip(a1, -1.0, 1.0)
-        self.w = float(np.clip(w_target, 0.725, 0.785))
-        c_shift = -0.05 * stag_ratio + 0.01 * np.clip(a2, -1.0, 1.0)
-        self.c1 = float(np.clip(self.base_c1 + c_shift, 1.35, 1.65))
-        self.c2 = float(np.clip(self.base_c2 - c_shift, 1.35, 1.65))
+        """Action (3维) -> 纯净 RL 策略独立动态调节 PSO [w, c1, c2] (action=0 时精确退化为 Clerc-Kennedy Vanilla PSO)"""
+        a1 = float(np.clip(action[0], -1.0, 1.0))
+        a2 = float(np.clip(action[1], -1.0, 1.0)) if len(action) > 1 else 0.0
+        a3 = float(np.clip(action[2], -1.0, 1.0)) if len(action) > 2 else 0.0
+        self.w = float(np.clip(self.base_w + 0.18 * a1, 0.45, 0.95))
+        self.c1 = float(np.clip(self.base_c1 + 0.50 * a2, 0.70, 2.30))
+        self.c2 = float(np.clip(self.base_c2 + 0.50 * a3, 0.70, 2.30))
 
     def run(self) -> Dict[str, Any]:
         d = len(self.x0)
@@ -142,21 +140,15 @@ class PSOOptimizer(BaseAirfoilOptimizer):
                     pbest_scores[i] = score
                     pbest_positions[i] = positions[i].copy()
 
-            # 记录经验 (跨工况自适应归一化稠密奖励与突破里程碑奖励)
+            # 记录经验 (跨工况无标度归一化稠密奖励，零测试集阈值先验泄漏)
             if self.is_meta and action is not None:
                 next_state = self.get_state()
                 done = (self.eval_count >= self.max_evals)
-                prog = self.eval_count / max(self.max_evals, 1)
-                rel_gain = (self.best_score - score_before) / max(self.initial_score, 15.0)
-                reward = rel_gain * (15.0 + 35.0 * prog) - 0.01
-                if self.best_score > 196.0 and score_before <= 196.0:
-                    reward += 1.5  # 突破 196 基准
-                if self.best_score > 206.0 and score_before <= 206.0:
-                    reward += 3.0  # 突破 206 卓越水平
-                if self.best_score > 218.0 and score_before <= 218.0:
-                    reward += 5.0  # 突破 218 极致水平
+                denom = max(abs(self.initial_score), 20.0)
+                rel_gain = (self.best_score - score_before) / denom
+                reward = rel_gain * 15.0
                 if done:
-                    reward += max((self.best_score - self.initial_score) / 30.0, 0.0) * 0.50
+                    reward += max((self.best_score - self.initial_score) / denom, 0.0) * 1.0
                 self.transitions.append({
                     "state": state,
                     "action": action,

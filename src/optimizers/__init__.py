@@ -23,7 +23,7 @@ OPTIMIZER_CONFIGS = {
     "DE": {
         "class": DEOptimizer,
         "state_dim": 11,
-        "action_dim": 3,
+        "action_dim": 2,
         "desc": "Differential Evolution (current-to-best/1/bin)",
     },
     "PSO": {

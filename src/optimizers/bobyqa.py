@@ -51,8 +51,8 @@ class PyBobyqaOptimizer(BaseAirfoilOptimizer):
         scale_delta = float(np.exp(np.clip(action[0], -1.0, 1.0) * 0.35))
         new_delta = float(np.clip(
             controller_delta * scale_delta,
-            controller_rho * 1.01,
-            self.rhobeg * 4.0,
+            controller_rho,
+            max(self.rhobeg * 4.0, controller_delta),
         ))
         self.current_delta = new_delta
         return new_delta
@@ -94,18 +94,15 @@ class PyBobyqaOptimizer(BaseAirfoilOptimizer):
             d, gopt, H, gnew, crvmin = orig_tr_step(controller_self, params)
             optimizer_instance.model_grad_norm = float(np.linalg.norm(gopt))
 
-            # 记录经验 (跨工况自适应归一化稠密奖励)
+            # 记录经验 (跨工况无标度归一化稠密奖励，零测试集阈值先验泄漏)
             if optimizer_instance.is_meta and action is not None:
                 next_state = optimizer_instance.get_state()
                 done = (optimizer_instance.eval_count >= optimizer_instance.max_evals)
-                rel_gain = (optimizer_instance.best_score - score_before) / max(optimizer_instance.initial_score, 15.0)
-                reward = rel_gain * 30.0 - 0.002
-                if optimizer_instance.best_score > 150.0 and score_before <= 150.0:
-                    reward += 1.0  # 突破 150 基准
-                if optimizer_instance.best_score > 175.0 and score_before <= 175.0:
-                    reward += 2.0  # 突破 175 卓越水平
+                denom = max(abs(optimizer_instance.initial_score), 20.0)
+                rel_gain = (optimizer_instance.best_score - score_before) / denom
+                reward = rel_gain * 15.0
                 if done:
-                    reward += max((optimizer_instance.best_score - optimizer_instance.initial_score) / 50.0, 0.0) * 0.25
+                    reward += max((optimizer_instance.best_score - optimizer_instance.initial_score) / denom, 0.0) * 1.0
                 optimizer_instance.transitions.append({
                     "state": state,
                     "action": action,

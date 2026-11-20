@@ -125,7 +125,8 @@ class PPOAgent:
 
         states = torch.nan_to_num(states, nan=0.0, posinf=5.0, neginf=-5.0)
         actions = torch.nan_to_num(actions, nan=0.0, posinf=1.0, neginf=-1.0)
-        rewards = torch.clamp(torch.nan_to_num(rewards, nan=0.0), -10.0, 10.0)
+        # 温和缩放至 O(1) 量级，避免 critic 拟合百级回报方差过大并消除截断失真
+        rewards = torch.clamp(torch.nan_to_num(rewards, nan=0.0) * 0.15, -5.0, 5.0)
         next_states = torch.nan_to_num(next_states, nan=0.0, posinf=5.0, neginf=-5.0)
 
         with torch.no_grad():

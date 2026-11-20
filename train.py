@@ -7,9 +7,17 @@
 
 import argparse
 import concurrent.futures
+import multiprocessing
 import os
 import sys
 import time
+
+# 防止 10 进程并发执行 SciPy/BLAS (如 TuRBO Cholesky) 时出现多线程争抢导致 10x+ 减速
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+
 from typing import Any, Dict, List, Tuple
 import numpy as np
 import torch
@@ -65,6 +73,10 @@ def worker_rollout(task_tuple: Tuple[str, float, float, int, Dict[str, np.ndarra
     )
     res = optimizer.run()
 
+    # 强制封闭每回合最后一个转移的终止标记，杜绝 GAE 优势跨独立气动工况泄漏
+    if len(optimizer.transitions) > 0:
+        optimizer.transitions[-1]["done"] = True
+
     return {
         "transitions": optimizer.transitions,
         "initial_score": float(optimizer.initial_score),
@@ -93,23 +105,25 @@ def train_single_optimizer(
     state_dim = cfg["state_dim"]
     action_dim = cfg["action_dim"]
 
-    lr = 2e-4 if opt_name == "PSO" else 3e-4
-    epochs = 4 if opt_name == "PSO" else 8
+    torch.manual_seed(42)
+    np.random.seed(42)
     agent = PPOAgent(
         state_dim=state_dim,
         action_dim=action_dim,
-        lr=lr,
-        update_epochs=epochs,
+        lr=3e-4,
+        update_epochs=8,
         device=device,
     )
 
     grid = get_training_grid()
     rng = np.random.RandomState(42)
     # 随机打乱工况顺序，保证全面而均匀地遍历 110 种气动网格
-    shuffled_indices = rng.permutation(len(grid))
-    sampled_indices = [int(shuffled_indices[i % len(grid)]) for i in range(n_episodes)]
+    sampled_indices = []
+    while len(sampled_indices) < n_episodes:
+        sampled_indices.extend([int(idx) for idx in rng.permutation(len(grid))])
+    sampled_indices = sampled_indices[:n_episodes]
 
-    # 将 110 个 episode 划分为若干批次 (每批 num_workers 个并发)
+    # 将 episode 划分为若干批次 (每批 num_workers 个并发)
     batch_size = max(1, num_workers)
     n_batches = int(np.ceil(n_episodes / batch_size))
 
@@ -117,7 +131,8 @@ def train_single_optimizer(
     total_transitions_collected = 0
     all_gains = []
 
-    with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
+    mp_ctx = multiprocessing.get_context("spawn")
+    with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers, mp_context=mp_ctx) as executor:
         for b in range(n_batches):
             b_start = b * batch_size
             b_end = min((b + 1) * batch_size, n_episodes)
@@ -172,8 +187,8 @@ def main():
     parser.add_argument(
         "--episodes",
         type=int,
-        default=110,
-        help="Number of training episodes per optimizer (default: 110 covering the full 10x11 grid)",
+        default=220,
+        help="Number of training episodes per optimizer (default: 220 = 2 full passes over the 10x11 grid)",
     )
     parser.add_argument(
         "--optimizers",
