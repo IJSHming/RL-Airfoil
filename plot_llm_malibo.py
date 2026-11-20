@@ -186,7 +186,10 @@ def plot_bar_comparison(data: dict, output_dir: str = "figures"):
     ax.set_xticklabels([f"Seed {s}" for s in seeds], fontsize=11, fontweight="bold")
     ax.set_xlabel("Independent Evaluation Seeds", fontsize=12, fontweight="bold", labelpad=8)
     ax.set_ylabel("Optimal Penalized Lift-to-Drag Ratio ($L/D$)", fontsize=12, fontweight="bold")
-    ax.set_ylim(130, 270)
+    all_bar_scores = [r["best_score"] for m in methods for r in results[m]]
+    y_lo = min(60.0, min(all_bar_scores) - 15.0) if min(all_bar_scores) < 135.0 else 130.0
+    y_hi = max(270.0, max(all_bar_scores) + 25.0)
+    ax.set_ylim(y_lo, y_hi)
     ax.grid(axis="y", linestyle="--", alpha=0.6, zorder=1)
 
     cond = data["condition"]
@@ -258,7 +261,10 @@ def plot_boxplot_comparison(data: dict, output_dir: str = "figures"):
             zorder=7,
         )
 
-    ax.set_ylim(155, 258)
+    all_box_scores = [sc for grp in score_data for sc in grp]
+    y_min_b = min(all_box_scores) - 12.0
+    y_max_b = max(all_box_scores) + 18.0
+    ax.set_ylim(y_min_b, y_max_b)
     ax.set_ylabel("Final Best Penalized Lift-to-Drag Ratio ($L/D$)", fontsize=12, fontweight="bold")
     ax.grid(axis="y", linestyle="--", alpha=0.6, zorder=1)
     cond = data["condition"]

@@ -71,10 +71,17 @@ def run_malibo_single_seed(
         )
 
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    num_tasks = ckpt.get("num_tasks", 550)
+    num_tasks = ckpt.get("num_tasks", 250)
     feature_dim = ckpt.get("feature_dim", 50)
+    hidden_dim = ckpt.get("hidden_dim", 64)
+    num_hidden_layers = ckpt.get("num_hidden_layers", 4)
 
-    res_cfg = ResFFNConfig(in_dim=18, feature_dim=feature_dim)
+    res_cfg = ResFFNConfig(
+        in_dim=18,
+        hidden_dim=hidden_dim,
+        num_hidden_layers=num_hidden_layers,
+        feature_dim=feature_dim,
+    )
     model = MALIBOMetaModel(num_tasks=num_tasks, config=res_cfg)
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval().to(device)
@@ -83,13 +90,9 @@ def run_malibo_single_seed(
     opt_cfg.optimization.seed = seed
     opt_cfg.optimization.budget = max_evals
     opt_cfg.optimization.n_init = 15
-    init_x_unit = (x0 - lb) / (ub - lb + 1e-8)
+    init_x_unit = (x0 - lb) / (ub - lb + 1e-12)
 
-    def is_geom_valid(th: np.ndarray) -> bool:
-        _, af = evaluator._theta_to_kulfan(th)
-        is_fatal, _, _ = evaluator.validate_geometry(af)
-        return not is_fatal
-
+    # 严格对齐原论文 Pan et al. (ICML 2024): 移除免费几何预筛器与信赖域，保证纯净原版 MALIBO 对比
     malibo_opt = MALIBOOptimizer(
         meta_model=model,
         dim=18,
@@ -100,7 +103,6 @@ def run_malibo_single_seed(
         n_init=15,
         config=opt_cfg,
         budget=max_evals,
-        geometry_validator=is_geom_valid,
         device=device,
     )
 
