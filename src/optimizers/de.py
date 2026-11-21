@@ -42,24 +42,24 @@ class DEOptimizer(BaseAirfoilOptimizer):
         self.pop_diversity = 0.0
 
     def get_state(self) -> np.ndarray:
-        """DE 状态空间 (11维) = 6维通用状态 + 5维 DE 种群演化特征"""
+        """DE 状态空间 (11维) = 6维通用状态 + 5维 DE 种群演化特征 (以近期可行率替换冗余停滞特征)"""
         base = self.get_base_state()
 
         norm_cr = float(self.CR)
         norm_f = float(self.F / 1.2)
-        norm_stag = float(min(self.stagnation_counter / 15.0, 2.0))
+        feas_rate = self.get_recent_feasibility_rate(window=12)
         norm_fit_std = float(min(self.pop_fitness_std / 20.0, 2.0))
-        norm_div = float(min(self.pop_diversity / 0.5, 2.0))
+        norm_div = float(min(self.pop_diversity / 0.25, 2.0))
 
-        specific = np.array([norm_cr, norm_f, norm_stag, norm_fit_std, norm_div], dtype=np.float32)
+        specific = np.array([norm_cr, norm_f, feas_rate, norm_fit_std, norm_div], dtype=np.float32)
         return np.concatenate([base, specific])
 
     def apply_action(self, action: np.ndarray):
         """Action (2维) -> 纯净 RL 策略动态调节差分进化超参 [F, CR] (action=0 时精确退化为 Vanilla DE)"""
         a1 = float(np.clip(action[0], -1.0, 1.0))
         a2 = float(np.clip(action[1], -1.0, 1.0)) if len(action) > 1 else 0.0
-        self.F = float(np.clip(self.base_f * np.exp(a1 * 0.45), 0.25, 1.20))
-        self.CR = float(np.clip(self.base_cr + a2 * 0.18, 0.40, 0.98))
+        self.F = float(np.clip(self.base_f * np.exp(a1 * 0.35), 0.35, 1.05))
+        self.CR = float(np.clip(self.base_cr + a2 * 0.15, 0.50, 0.95))
 
     def run(self) -> Dict[str, Any]:
         d = len(self.x0)
@@ -138,19 +138,14 @@ class DEOptimizer(BaseAirfoilOptimizer):
                     population[i] = trial
                     fitnesses[i] = trial_fit
 
-            # 记录 RL 经验 (跨工况无标度归一化稠密奖励，零测试集阈值先验泄漏)
+            # 记录 RL 经验 (保存原始最优增量，交由训练端按同工况配对基线做无偏控制变量归一化)
             if self.is_meta and action is not None:
                 next_state = self.get_state()
                 done = (self.eval_count >= self.max_evals)
-                denom = max(abs(self.initial_score), 20.0)
-                rel_gain = (self.best_score - score_before) / denom
-                reward = rel_gain * 15.0
-                if done:
-                    reward += max((self.best_score - self.initial_score) / denom, 0.0) * 1.0
                 self.transitions.append({
                     "state": state,
                     "action": action,
-                    "reward": reward,
+                    "reward": float(self.best_score - score_before),
                     "next_state": next_state,
                     "done": done,
                 })

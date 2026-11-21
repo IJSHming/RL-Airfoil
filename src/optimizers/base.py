@@ -85,6 +85,13 @@ class BaseAirfoilOptimizer(ABC):
 
         return score
 
+    def get_recent_feasibility_rate(self, window: int = 12) -> float:
+        """返回最近 window 次评估中满足全部物理与几何约束的可行比例 (纯观测特征, [0, 1])"""
+        if not self.history_feasible:
+            return 1.0
+        recent = self.history_feasible[-window:]
+        return float(sum(1 for f in recent if f) / len(recent))
+
     def evaluate_initial(self):
         """初始评估基准形状 NACA0012"""
         score = self.evaluate(self.x0)

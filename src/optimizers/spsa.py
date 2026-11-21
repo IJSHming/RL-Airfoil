@@ -38,33 +38,34 @@ class SPSAOptimizer(BaseAirfoilOptimizer):
         # 动态控制量
         self.current_a = step_rel
         self.current_c = c_rel * self.span
+        self.last_vanilla_a = step_rel
         self.last_grad = np.zeros_like(self.x0)
         self.current_grad = np.zeros_like(self.x0)
         self.m = np.zeros_like(self.x0)
         self.iter_k = 0
 
     def get_state(self) -> np.ndarray:
-        """SPSA 状态空间 (10维) = 6维通用状态 + 4维 SPSA 专有动态特征"""
+        """SPSA 状态空间 (10维) = 6维通用状态 + 4维 SPSA 专有动态特征 (无上限饱和，含近期可行率)"""
         base = self.get_base_state()
 
-        norm_a = float(np.clip(self.current_a / max(self.step_rel, 1e-4), 0.1, 5.0))
-        norm_c = float(np.clip(np.mean(self.current_c / np.maximum(self.c_rel * self.span, 1e-4)), 0.1, 5.0))
-        grad_norm = float(min(np.linalg.norm(self.current_grad) / 50.0, 2.0))
+        log_a_ratio = float(np.clip(np.log(max(self.current_a / max(self.last_vanilla_a, 1e-8), 1e-3)), -2.0, 2.0))
+        feas_rate = self.get_recent_feasibility_rate(window=12)
+        log_grad_norm = float(np.clip(np.log10(1.0 + np.linalg.norm(self.current_grad)) / 4.0, 0.0, 2.0))
 
         # 连续两步梯度方向余弦相似度
         norm_prod = (np.linalg.norm(self.current_grad) * np.linalg.norm(self.last_grad)) + 1e-8
         grad_cos = float(np.dot(self.current_grad, self.last_grad) / norm_prod)
         grad_cos = float(np.clip(grad_cos, -1.0, 1.0))
 
-        specific = np.array([norm_a, norm_c, grad_norm, grad_cos], dtype=np.float32)
+        specific = np.array([log_a_ratio, feas_rate, log_grad_norm, grad_cos], dtype=np.float32)
         return np.concatenate([base, specific])
 
     def apply_action(self, action: np.ndarray, vanilla_a: float, vanilla_c: np.ndarray):
         """Action (2维) -> 纯净 RL 策略动态调节步长乘子与摄动尺度乘子 (action=0 时精确退化为 Vanilla SPSA)"""
         a1 = float(np.clip(action[0], -1.0, 1.0))
         a2 = float(np.clip(action[1], -1.0, 1.0)) if len(action) > 1 else 0.0
-        scale_a = float(np.exp(a1 * 0.70))
-        scale_c = float(np.exp(a2 * 0.50))
+        scale_a = float(np.exp(a1 * 0.45))
+        scale_c = float(np.exp(a2 * 0.35))
 
         self.current_a = float(np.clip(vanilla_a * scale_a, 1e-6, 0.50))
         self.current_c = np.clip(vanilla_c * scale_c, 1e-4 * self.span, 0.25 * self.span)
@@ -88,6 +89,7 @@ class SPSAOptimizer(BaseAirfoilOptimizer):
             # 标准 Vanilla 调度衰减 (Spall 准则)
             vanilla_a = a_base / (1.0 + self.iter_k / 20.0) ** self.alpha_exp
             vanilla_c = c_vec / (1.0 + self.iter_k) ** self.gamma_exp
+            self.last_vanilla_a = vanilla_a
 
             if self.is_meta and self.rl_policy is not None:
                 state = self.get_state()
@@ -125,19 +127,14 @@ class SPSAOptimizer(BaseAirfoilOptimizer):
                 self.upper_bounds,
             )
 
-            # 记录经验 (跨工况无标度归一化稠密奖励，零测试集阈值先验泄漏)
+            # 记录经验 (保存原始最优增量，交由训练端按同工况配对基线做无偏控制变量归一化)
             if self.is_meta and action is not None:
                 next_state = self.get_state()
                 done = (self.eval_count >= self.max_evals)
-                denom = max(abs(self.initial_score), 20.0)
-                rel_gain = (self.best_score - score_before) / denom
-                reward = rel_gain * 15.0
-                if done:
-                    reward += max((self.best_score - self.initial_score) / denom, 0.0) * 1.0
                 self.transitions.append({
                     "state": state,
                     "action": action,
-                    "reward": reward,
+                    "reward": float(self.best_score - score_before),
                     "next_state": next_state,
                     "done": done,
                 })

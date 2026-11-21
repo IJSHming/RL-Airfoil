@@ -35,15 +35,15 @@ class PyBobyqaOptimizer(BaseAirfoilOptimizer):
         self.model_grad_norm = 0.0
 
     def get_state(self) -> np.ndarray:
-        """Py-BOBYQA 状态空间 (10维) = 6维通用状态 + 4维 BOBYQA 信赖域专有动态特征"""
+        """Py-BOBYQA 状态空间 (10维) = 6维通用状态 + 4维 BOBYQA 信赖域动态特征 (修复死常量与梯度饱和)"""
         base = self.get_base_state()
 
         log_delta = np.clip(np.log(max(self.current_delta / self.rhobeg, 1e-4)) / 2.0, -2.0, 2.0)
         log_rho = np.clip(np.log(max(self.current_rho / self.rhoend, 1e-4)) / 5.0, -2.0, 2.0)
-        norm_ratio = np.clip(self.current_ratio / 2.0, -2.0, 2.0)
-        grad_norm = min(self.model_grad_norm / 20.0, 2.0)
+        feas_rate = self.get_recent_feasibility_rate(window=12)
+        log_grad_norm = float(np.clip(np.log10(1.0 + self.model_grad_norm) / 4.0, 0.0, 2.0))
 
-        specific = np.array([log_delta, log_rho, norm_ratio, grad_norm], dtype=np.float32)
+        specific = np.array([log_delta, log_rho, feas_rate, log_grad_norm], dtype=np.float32)
         return np.concatenate([base, specific])
 
     def apply_action(self, action: np.ndarray, controller_delta: float, controller_rho: float) -> float:
@@ -94,19 +94,14 @@ class PyBobyqaOptimizer(BaseAirfoilOptimizer):
             d, gopt, H, gnew, crvmin = orig_tr_step(controller_self, params)
             optimizer_instance.model_grad_norm = float(np.linalg.norm(gopt))
 
-            # 记录经验 (跨工况无标度归一化稠密奖励，零测试集阈值先验泄漏)
+            # 记录经验 (保存原始最优增量，交由训练端按同工况配对基线做无偏控制变量归一化)
             if optimizer_instance.is_meta and action is not None:
                 next_state = optimizer_instance.get_state()
                 done = (optimizer_instance.eval_count >= optimizer_instance.max_evals)
-                denom = max(abs(optimizer_instance.initial_score), 20.0)
-                rel_gain = (optimizer_instance.best_score - score_before) / denom
-                reward = rel_gain * 15.0
-                if done:
-                    reward += max((optimizer_instance.best_score - optimizer_instance.initial_score) / denom, 0.0) * 1.0
                 optimizer_instance.transitions.append({
                     "state": state,
                     "action": action,
-                    "reward": reward,
+                    "reward": float(optimizer_instance.best_score - score_before),
                     "next_state": next_state,
                     "done": done,
                 })

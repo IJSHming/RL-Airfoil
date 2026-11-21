@@ -65,11 +65,11 @@ class TuRBOOptimizer(BaseAirfoilOptimizer):
         return np.concatenate([base, specific])
 
     def apply_action(self, action: np.ndarray):
-        """Action (2维) -> 纯净 RL 策略调节 [信赖域尺度弹性乘子, 汤普森采样探索温度] (action=0 时精确退化为 Vanilla TuRBO)"""
-        scale_L = float(np.exp(np.clip(action[0], -1.0, 1.0) * 0.50))
+        """Action (2维) -> 纯净 RL 策略温和调节 [信赖域尺度弹性乘子, 汤普森采样探索温度] (action=0 精确等于 Vanilla TuRBO)"""
+        scale_L = float(np.exp(np.clip(action[0], -1.0, 1.0) * 0.30))
         self.L = float(np.clip(self.base_L * scale_L, self.L_min, self.L_max))
-        temp_scale = float(np.exp(np.clip(action[1], -1.0, 1.0) * 0.50))
-        self.temperature = float(np.clip(temp_scale, 0.50, 2.00))
+        temp_scale = float(np.exp(np.clip(action[1], -1.0, 1.0) * 0.25))
+        self.temperature = float(np.clip(temp_scale, 0.70, 1.40))
 
     def run(self) -> Dict[str, Any]:
         d = len(self.x0)
@@ -188,19 +188,15 @@ class TuRBOOptimizer(BaseAirfoilOptimizer):
                     self.base_L = self.L_init  # TuRBO 标准重启机制：信赖域收敛塌缩后重置展开，跳出局部陷阱
                 self.n_failure = 0
 
-            # 记录经验 (跨工况无标度归一化稠密奖励，零测试集阈值先验泄漏)
+            # 记录经验 (保存当前 NFE 步号与最优增量，供训练端执行势能差分步进配对奖励塑造)
             if self.is_meta and action is not None:
                 next_state = self.get_state()
                 done = (self.eval_count >= self.max_evals)
-                denom = max(abs(self.initial_score), 20.0)
-                rel_gain = (self.best_score - score_before) / denom
-                reward = rel_gain * 15.0
-                if done:
-                    reward += max((self.best_score - self.initial_score) / denom, 0.0) * 1.0
                 self.transitions.append({
                     "state": state,
                     "action": action,
-                    "reward": reward,
+                    "reward": float(self.best_score - score_before),
+                    "eval_count": int(self.eval_count),
                     "next_state": next_state,
                     "done": done,
                 })

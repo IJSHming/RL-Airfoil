@@ -68,11 +68,14 @@ class CMAESOptimizer(BaseAirfoilOptimizer):
             # 提取 CMA 内部状态
             self.current_sigma = float(es.sigma)
             try:
-                # 进化路径范数与期望长度比值
-                if hasattr(es, "ps") and es.ps is not None:
+                # 修复 pycma 进化路径属性路径 (es.adapt_sigma.ps)
+                ps_vec = getattr(es, "ps", None)
+                if ps_vec is None and hasattr(es, "adapt_sigma"):
+                    ps_vec = getattr(es.adapt_sigma, "ps", None)
+                if ps_vec is not None:
                     d = len(self.x0)
                     chiN = d**0.5 * (1.0 - 1.0 / (4.0 * d) + 1.0 / (21.0 * d**2))
-                    self.path_ratio = float(np.linalg.norm(es.ps) / chiN)
+                    self.path_ratio = float(np.linalg.norm(ps_vec) / chiN)
                 # 协方差矩阵条件数
                 if hasattr(es, "D") and es.D is not None:
                     self.cond_c = float(np.max(es.D) / max(np.min(es.D), 1e-12)) ** 2
@@ -98,19 +101,14 @@ class CMAESOptimizer(BaseAirfoilOptimizer):
 
             es.tell(X, fitnesses_to_tell)
 
-            # 记录经验 (跨工况无标度归一化稠密奖励，零测试集阈值先验泄漏)
+            # 记录经验 (保存原始最优增量，交由训练端按同工况配对基线做无偏控制变量归一化)
             if self.is_meta and action is not None:
                 next_state = self.get_state()
                 done = bool(self.eval_count >= self.max_evals or bool(es.stop()))
-                denom = max(abs(self.initial_score), 20.0)
-                rel_gain = (self.best_score - score_before) / denom
-                reward = rel_gain * 15.0
-                if done:
-                    reward += max((self.best_score - self.initial_score) / denom, 0.0) * 1.0
                 self.transitions.append({
                     "state": state,
                     "action": action,
-                    "reward": reward,
+                    "reward": float(self.best_score - score_before),
                     "next_state": next_state,
                     "done": done,
                 })

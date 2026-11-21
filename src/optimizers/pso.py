@@ -46,20 +46,20 @@ class PSOOptimizer(BaseAirfoilOptimizer):
         norm_w = self.w
         norm_c1 = self.c1 / 2.0
         norm_c2 = self.c2 / 2.0
-        norm_div = min(self.swarm_diversity / 0.5, 2.0)
-        norm_v = min(self.mean_vel_norm / 0.1, 2.0)
+        norm_div = min(self.swarm_diversity / 0.25, 2.0)
+        feas_rate = self.get_recent_feasibility_rate(window=15)
 
-        specific = np.array([norm_w, norm_c1, norm_c2, norm_div, norm_v], dtype=np.float32)
+        specific = np.array([norm_w, norm_c1, norm_c2, norm_div, feas_rate], dtype=np.float32)
         return np.concatenate([base, specific])
 
     def apply_action(self, action: np.ndarray):
-        """Action (3维) -> 纯净 RL 策略独立动态调节 PSO [w, c1, c2] (action=0 时精确退化为 Clerc-Kennedy Vanilla PSO)"""
+        """Action (3维) -> 纯净 RL 策略在 Clerc-Kennedy 收敛稳定带内独立调节 [w, c1, c2] (action=0 精确等于 Vanilla PSO)"""
         a1 = float(np.clip(action[0], -1.0, 1.0))
         a2 = float(np.clip(action[1], -1.0, 1.0)) if len(action) > 1 else 0.0
         a3 = float(np.clip(action[2], -1.0, 1.0)) if len(action) > 2 else 0.0
-        self.w = float(np.clip(self.base_w + 0.18 * a1, 0.45, 0.95))
-        self.c1 = float(np.clip(self.base_c1 + 0.50 * a2, 0.70, 2.30))
-        self.c2 = float(np.clip(self.base_c2 + 0.50 * a3, 0.70, 2.30))
+        self.w = float(np.clip(self.base_w + 0.10 * a1, 0.58, 0.83))
+        self.c1 = float(np.clip(self.base_c1 + 0.30 * a2, 1.15, 1.85))
+        self.c2 = float(np.clip(self.base_c2 + 0.30 * a3, 1.15, 1.85))
 
     def run(self) -> Dict[str, Any]:
         d = len(self.x0)
@@ -140,19 +140,14 @@ class PSOOptimizer(BaseAirfoilOptimizer):
                     pbest_scores[i] = score
                     pbest_positions[i] = positions[i].copy()
 
-            # 记录经验 (跨工况无标度归一化稠密奖励，零测试集阈值先验泄漏)
+            # 记录经验 (保存原始最优增量，交由训练端按同工况配对基线做无偏控制变量归一化)
             if self.is_meta and action is not None:
                 next_state = self.get_state()
                 done = (self.eval_count >= self.max_evals)
-                denom = max(abs(self.initial_score), 20.0)
-                rel_gain = (self.best_score - score_before) / denom
-                reward = rel_gain * 15.0
-                if done:
-                    reward += max((self.best_score - self.initial_score) / denom, 0.0) * 1.0
                 self.transitions.append({
                     "state": state,
                     "action": action,
-                    "reward": reward,
+                    "reward": float(self.best_score - score_before),
                     "next_state": next_state,
                     "done": done,
                 })

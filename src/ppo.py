@@ -100,6 +100,11 @@ class PPOAgent:
         self.network = ActorCritic(state_dim, action_dim).to(self.device)
         self.optimizer = torch.optim.Adam(self.network.parameters(), lr=lr, eps=1e-5)
 
+    def set_lr(self, lr: float):
+        """线性学习率衰减支持"""
+        for param_group in self.optimizer.param_groups:
+            param_group["lr"] = float(lr)
+
     def select_action(self, state: np.ndarray, deterministic: bool = False) -> np.ndarray:
         """根据当前状态输出连续动作向量"""
         self.network.eval()
@@ -125,8 +130,8 @@ class PPOAgent:
 
         states = torch.nan_to_num(states, nan=0.0, posinf=5.0, neginf=-5.0)
         actions = torch.nan_to_num(actions, nan=0.0, posinf=1.0, neginf=-1.0)
-        # 温和缩放至 O(1) 量级，避免 critic 拟合百级回报方差过大并消除截断失真
-        rewards = torch.clamp(torch.nan_to_num(rewards, nan=0.0) * 0.15, -5.0, 5.0)
+        # 配对控制变量归一化后的单步与终局奖励均处于 O(1) 量级，直接温和限幅保障数值稳定
+        rewards = torch.clamp(torch.nan_to_num(rewards, nan=0.0), -5.0, 5.0)
         next_states = torch.nan_to_num(next_states, nan=0.0, posinf=5.0, neginf=-5.0)
 
         with torch.no_grad():
