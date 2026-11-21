@@ -11,7 +11,7 @@ OPTIMIZER_CONFIGS = {
     "SPSA": {
         "class": SPSAOptimizer,
         "state_dim": 10,
-        "action_dim": 2,
+        "action_dim": 3,
         "desc": "Simultaneous Perturbation Stochastic Approximation",
     },
     "Py-BOBYQA": {
