@@ -83,7 +83,9 @@ RL-Airfoil/
 ├── benchmark_llm_malibo.py   # 四大范式 10 种子统一基准评测脚本
 ├── plot_results.py           # RL-Meta 阶段全套出版级图表 (figures/rl_meta/)
 ├── plot_llm_malibo.py        # 四大范式出版级图表 (figures/llm_malibo/)
+├── export_airfoil_stl.py     # 高保真水密 2D 翼型 CFD STL 表面网格导出脚本
 ├── launch_sglang.sh          # 本地 SGLang Qwen3.8-27B-FP8 服务启动脚本
+├── cfd_models/               # 5 套水密 2-Manifold CFD STL 翼型网格与 meshing 说明
 ├── weights/                  # 6 个内部验证择优的纯净 Meta-PPO 权重 (.pt)
 ├── results/                  # 10 种子全量 JSON/NPZ 实验数据
 └── figures/                  # 300 DPI PNG 与 PDF 矢量图
@@ -98,8 +100,9 @@ python train.py --episodes 450 --turbo_episodes 300 --num_workers 10 --device cp
 python benchmark.py --num_workers 10 --device cpu
 python plot_results.py
 
-# 3. 启动本地 SGLang 服务，运行四大范式对比测试并绘图
+# 3. 启动本地 SGLang 服务，运行四大范式对比测试、绘图并导出 CFD 水密 STL
 bash launch_sglang.sh
 python benchmark_llm_malibo.py
 python plot_llm_malibo.py
+python export_airfoil_stl.py
 ```
